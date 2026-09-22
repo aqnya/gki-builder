@@ -90,6 +90,10 @@ jobs:
           key: repo-objects-${{ steps.cfg.outputs.kernel_branch }}-${{ github.run_id }}
           restore-keys: |
             repo-objects-${{ steps.cfg.outputs.kernel_branch }}-
+      - name: install build tools and dep
+        run: |
+          sudo apt update
+          sudo apt install libelf
 
       - name: Build
         run: bash scripts/build.sh
