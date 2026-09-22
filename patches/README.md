@@ -1,6 +1,7 @@
 # patches/
 
-把内核补丁放到这里，CI 会在编译前按**文件名字典序**依次应用到内核源码树。
+把内核补丁放到这里，CI 会在编译前按**文件名字典序**依次应用到内核源码树的
+**`common/`** 目录（也就是 `kernel/common`，repo 同步后的工作区路径）。
 
 ## 规则
 
@@ -35,9 +36,9 @@
 在内核源码树里改完后：
 
 ```bash
-git -C .work/kernel diff > ../patches/0001-my-change.patch
+git -C .work/src/common diff > patches/0001-my-change.patch
 # 或者想保留提交信息：
-git -C .work/kernel format-patch -1 -o ../patches/
+git -C .work/src/common format-patch -1 -o patches/
 ```
 
 ## 注意

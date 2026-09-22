@@ -4,14 +4,16 @@
 # 触发路径过滤见 .github/workflows/build.yml 的 on.push.paths。
 
 kernel:
-  # GKI 内核源码仓库
-  repo: https://android.googlesource.com/kernel/common
-  # kernel/common 的分支名（注意：没有 common- 前缀，那个是 kernel/manifest 的命名）
-  # 可选：android13-5.15 / android14-5.15 / android14-6.1 / android15-6.6 / android16-6.12
-  branch: android13-5.15
-  # 指定编译的 commit —— 唯一来源就在这里。
-  #   留空 ""  -> 编译 branch 最新提交
-  #   填 40 位 SHA -> 精确钉死到该 commit（推荐，保证可复现）
+  # Android 内核 manifest 仓库 —— 源码用 `repo init/sync` 拉取，这里给 repo init -u
+  repo: https://android.googlesource.com/kernel/manifest
+  # manifest 分支。注意：**这里带 common- 前缀，kernel/common 的分支名不带**。
+  #   kernel/manifest -> common-android13-5.15      （repo init -b 用这个）
+  #   kernel/common   -> android13-5.15             （manifest 里 project 的 revision）
+  # 其它可选：common-android14-5.15 / common-android14-6.1 / common-android15-6.6 ...
+  branch: common-android13-5.15
+  # 指定编译的 commit —— 唯一来源就在这里，钉的是 kernel/common 的 SHA。
+  #   留空 ""          -> 用 manifest 给出的 revision（分支 tip）
+  #   填 40 位 SHA     -> 精确钉死（推荐，保证可复现）
   commit: ""
 
 # 生成 .config 用的 defconfig 目标
@@ -19,13 +21,14 @@ defconfig: gki_defconfig
 arch: arm64
 
 toolchain:
-  # CLANG_VERSION 默认从内核树 build.config.constants 自动读取。
-  # android13-5.15 对应 r450784e。留空 = 自动；填了则覆盖。
+  # CLANG_VERSION 默认从内核树 common/build.config.constants 自动读取。
+  # android13-5.15 / common-android13-5.15 对应 r450784e。留空 = 自动；填了则覆盖。
   clang_version: ""
-  # AOSP prebuilts 里承载该 clang 的分支，留空 = 按候选列表依次探测。
-  # 自动探测失败时（AOSP 会返回 200 + 占位空包）填这里。
-  # android13-5.15 / r450784e 实测可用：master-kernel-build-2022
-  clang_branch: ""
+
+sync:
+  # repo sync 拉哪些项目。留空 = 用默认集合（内核源码 + make 需要的工具链/构建工具），
+  # 只 sync 需要的能省不少磁盘和时间。要更多项目（比如 virtual-device）就在这里加。
+  projects: []
 
 patches:
   # patch --fuzz = 允许忽略的上下文行数。0 最严格：上下文必须逐行命中。

@@ -24,6 +24,8 @@ except ImportError:  # pragma: no cover - runner 应保证 PyYAML 存在
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 SYMBOL_RE = re.compile(r"^(?:CONFIG_)?[A-Za-z0-9_.]+$")
+# repo 项目路径：不含空白，不能以 / 开头
+PROJECT_RE = re.compile(r"^[A-Za-z0-9_./+-]+$")
 
 
 class ConfigError(Exception):
@@ -40,12 +42,16 @@ def _load(path: str) -> object:
         raise ConfigError(f"YAML 解析失败：{exc}")
 
 
-def _mapping(data: object, key: str) -> dict:
-    """取 data[key]，必须是 mapping；缺省时返回空 dict。"""
+def _top(data: object) -> dict:
     if data is None:
-        data = {}
+        raise ConfigError("配置文件是空的")
     if not isinstance(data, dict):
         raise ConfigError(f"顶层必须是 mapping，实际是 {type(data).__name__}")
+    return data
+
+
+def _mapping(data: dict, key: str) -> dict:
+    """取 data[key]，必须是 mapping；缺省时返回空 dict。"""
     if key not in data or data[key] is None:
         return {}
     value = data[key]
@@ -107,7 +113,7 @@ class Config:
         "defconfig",
         "arch",
         "clang_version",
-        "clang_branch",
+        "projects",
         "fuzz",
         "toggles",
     )
@@ -115,12 +121,10 @@ class Config:
 
 def parse(path: str) -> Config:
     data = _load(path)
-    if data is None:
-        raise ConfigError(f"{path} 是空文件")
-
-    kernel = _mapping(data, "kernel")
+    top = _top(data)
     cfg = Config()
 
+    kernel = _mapping(top, "kernel")
     cfg.repo = _str(kernel, "repo", "kernel", required=True)
     if not re.match(r"^(?:https?|git|ssh)://|^[^/@]+@[^:/]+:", cfg.repo):
         raise ConfigError(f"'kernel.repo' 看起来不是 git 地址：{cfg.repo}")
@@ -135,15 +139,31 @@ def parse(path: str) -> Config:
             f"'kernel.commit' 必须是 40 位十六进制 SHA 或留空，实际是 {cfg.commit!r}"
         )
 
-    top = data if isinstance(data, dict) else {}
     cfg.defconfig = _str(top, "defconfig", "top", required=True)
     cfg.arch = _str(top, "arch", "top", required=True)
 
-    toolchain = _mapping(data, "toolchain")
+    toolchain = _mapping(top, "toolchain")
     cfg.clang_version = _str(toolchain, "clang_version", "toolchain")
-    cfg.clang_branch = _str(toolchain, "clang_branch", "toolchain")
 
-    patches = _mapping(data, "patches")
+    sync = _mapping(top, "sync")
+    raw_projects = sync.get("projects", [])
+    if not isinstance(raw_projects, list):
+        raise ConfigError(
+            f"'sync.projects' 必须是列表，实际是 {type(raw_projects).__name__}"
+        )
+    projects: list[str] = []
+    for item in raw_projects:
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(f"'sync.projects' 的每一项必须是非空字符串，实际是 {item!r}")
+        item = item.strip().strip("/")
+        if not PROJECT_RE.match(item):
+            raise ConfigError(f"'sync.projects' 含非法项目路径：{item!r}")
+        if item in projects:
+            raise ConfigError(f"'sync.projects' 中 {item} 重复")
+        projects.append(item)
+    cfg.projects = projects
+
+    patches = _mapping(top, "patches")
     fuzz = patches.get("fuzz", 0)
     if isinstance(fuzz, bool) or not isinstance(fuzz, int):
         raise ConfigError(f"'patches.fuzz' 必须是 0-99 的整数，实际是 {fuzz!r}")
@@ -151,7 +171,7 @@ def parse(path: str) -> Config:
         raise ConfigError(f"'patches.fuzz' 必须在 0-99 之间，实际是 {fuzz}")
     cfg.fuzz = fuzz
 
-    raw_config = _mapping(data, "config")
+    raw_config = _mapping(top, "config")
     toggles: list[tuple[str, str]] = []
     seen: set[str] = set()
     for key, value in raw_config.items():
@@ -173,8 +193,8 @@ def emit_shell(cfg: Config) -> None:
         "DEFCONFIG": cfg.defconfig,
         "ARCH": cfg.arch,
         "TOOLCHAIN_CLANG_VERSION": cfg.clang_version,
-        "TOOLCHAIN_CLANG_BRANCH": cfg.clang_branch,
         "PATCH_FUZZ": str(cfg.fuzz),
+        "SYNC_PROJECTS": " ".join(cfg.projects),
         "TOGGLE_COUNT": str(len(cfg.toggles)),
     }
     for key, value in values.items():

@@ -1,6 +1,7 @@
 # gki-builder
 
-在 GitHub Actions 上编译 Android GKI 内核。全部可调项集中在两个地方：
+在 GitHub Actions 上用 Android 官方的 **`repo`** 工具同步并编译 GKI 内核。
+全部可调项集中在两个地方：
 
 | 你想做的事 | 改哪里 |
 |---|---|
@@ -36,42 +37,77 @@ config:
 
 ```yaml
 kernel:
-  branch: android13-5.15
-  commit: ""            # 留空 = 分支最新
-  # commit: "e6654bf2f6c2c3c7b6af8897baa2a86991d3b5ac"   # 精确钉死
+  branch: common-android13-5.15
+  commit: ""            # 留空 = manifest 给出的 revision（分支 tip）
+  # commit: "77804d3596695c7b85fe038c81d9580283ffd2ca"   # 精确钉死
 ```
 
-`commit` 是唯一的 commit 来源（40 位 SHA，或留空用分支 tip）。填 SHA 能保证可复现，
-也避免分支 tip 漂移导致刷入后 vermagic 对不上、vendor 模块加载失败。
+`commit` 是唯一的 commit 来源（40 位 SHA，或留空）。钉住的是 **`kernel/common` 的 SHA**。
 
-查 SHA：
+实现方式是 `repo init` 之后写一个 local manifest，把 `kernel/common` 的 revision
+换成你给的 SHA，再 `repo sync`；同步后还会校验一次 `git rev-parse HEAD` 是否吻合。
+
+填 SHA 能保证可复现，也避免分支 tip 漂移导致 vermagic 对不上、vendor 模块加载失败。
+查当前 tip：
 
 ```bash
 git ls-remote https://android.googlesource.com/kernel/common refs/heads/android13-5.15
 ```
 
-> ⚠️ 分支名是 `android13-5.15`，**没有 `common-` 前缀**。
-> `common-android13-5.15` 是 `kernel/manifest` 的分支名，拿来 clone `kernel/common` 会 404。
+> ⚠️ **两套分支名，前缀规则相反，别搞混：**
+>
+> | 用在哪 | 分支名 | 例 |
+> |---|---|---|
+> | `repo init -b`（`kernel/manifest`） | **带** `common-` 前缀 | `common-android13-5.15` |
+> | `kernel/common` 的 project revision | **不带**前缀 | `android13-5.15` |
+>
+> `config.yml` 里 `kernel.repo` / `kernel.branch` 填的是 **manifest** 那一套。
 
 ### 3. 放补丁
 
-见 [`patches/README.md`](patches/README.md)。零填充文件名控制顺序，`fuzz` 默认 0（严格）。
+见 [`patches/README.md`](patches/README.md)。零填充文件名控制顺序，补丁打在 `common/` 目录上，
+`fuzz` 默认 0（严格）。
 
-## 支持的分支
+## 源码怎么来的
 
-`config.yml` 里 `kernel.branch` 可换（`kernel/common` 仓库的真实分支）：
+用 `repo` 而不是裸 `git clone`：
 
-| 分支 | 内核 | clang |
+```bash
+repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15
+repo sync common build/kernel prebuilts/clang/host/linux-x86 ...
+```
+
+这样 clang、build-tools 等工具链会跟着 manifest 一起到位，版本也和内核树配套
+（`common/build.config.constants` 里的 `CLANG_VERSION`）。默认只 sync make 路线需要的项目来省磁盘，
+需要更多项目（比如 `common-modules/virtual-device`）就在 `config.yml` 的 `sync.projects` 里加：
+
+```yaml
+sync:
+  projects:
+    - common
+    - build/kernel
+    - prebuilts/clang/host/linux-x86
+    - prebuilts/build-tools
+    - prebuilts/kernel-build-tools
+    - kernel/configs
+    - common-modules/virtual-device
+```
+
+留空 = 用内置默认集合。
+
+## 支持的 manifest 分支
+
+`config.yml` 里 `kernel.branch` 可换（`kernel/manifest` 的真实分支）：
+
+| manifest 分支 | 内核 | kernel/common 分支 |
 |---|---|---|
-| `android13-5.15` | 5.15 | `r450784e` |
-| `android14-5.15` | 5.15 | `r487747c` |
-| `android14-6.1` | 6.1 | `r487747c` |
-| `android15-6.6` | 6.6 | `r510928` |
-| `android16-6.12` | 6.12 | `r536225` |
+| `common-android13-5.15` | 5.15 | `android13-5.15` |
+| `common-android14-5.15` | 5.15 | `android14-5.15` |
+| `common-android14-6.1` | 6.1 | `android14-6.1` |
+| `common-android15-6.6` | 6.6 | `android15-6.6` |
 
-clang 版本默认从内核树的 `build.config.constants` 自动读取，一般不用管。
-换分支后如果工具链下载失败，多半是该版本不在候选的 prebuilts 分支里，
-在 `toolchain.clang_branch` 填上它所在的分支即可（例如 `master-kernel-build-2022`）。
+还有带日期的快照分支（`common-android13-5.15-2023-01` 这类），manifest 里每个 project
+都钉了 SHA，适合要和某个时间点完全对齐的场景。
 
 ## 产物
 
@@ -89,24 +125,27 @@ python3 scripts/parse_config.py config.yml --config-list   # 看会被写进 .co
 bash -n scripts/build.sh                                   # 语法检查
 ```
 
-`scripts/build.sh` 也可以在本地跑完整流程，但需要 git / make / patch / curl / PyYAML，
-且要拉得动 `android.googlesource.com`。
+`scripts/build.sh` 也可以在本地跑完整流程，需要 git / make / patch / curl / python3(PyYAML)，
+会自动下载 `repo` 工具，并且要拉得动 `android.googlesource.com`。
 
 ## 工作原理
 
 ```
 config.yml ──► parse_config.py ──► 校验 ──► build.sh
                                                 │
-   1. clone kernel/common @ commit/branch ◄─────┘
-   2. 下载 AOSP clang（按 CLANG_VERSION，空包防线）
-   3. patches/*.patch 按序 dry-run 后应用
-   4. gki_defconfig → scripts/config → olddefconfig → 回读校验
-   5. make Image
-   6. 打包 Image + AnyKernel3.zip → upload-artifact
+   1. 装 repo 工具                              │
+   2. repo init -u <manifest> -b <branch> ◄─────┘
+      ├─ 有 commit 就写 local_manifests/pin-kernel-common.xml
+      └─ repo sync（只拉需要的项目）
+   3. 读 CLANG_VERSION，清掉用不到的历史 clang 版本省磁盘
+   4. patches/*.patch 按序 dry-run 后应用到 common/
+   5. gki_defconfig → scripts/config → olddefconfig → 回读校验
+   6. make Image
+   7. 打包 Image + AnyKernel3.zip → upload-artifact
 ```
 
 CI 侧还会先回收 runner 磁盘（只保证 14GB，不够）并加 16GB swap（防链接阶段 OOM），
-clang 用 `actions/cache` 缓存。
+`.repo/project-objects` 用 `actions/cache` 缓存以加速后续 sync。
 
 ## 许可
 

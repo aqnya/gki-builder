@@ -23,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # GitHub 只保证 14GB 可用空间，内核源码 + clang + out/ 会超。
+      # GitHub 只保证 14GB 可用空间，repo 同步（含 clang prebuilts）+ out/ 会超。
       # 先删掉 runner 上用不到的大件（官方 workaround 见 actions/virtual-environments#2840）。
       - name: Free disk space
         run: |
@@ -48,6 +48,16 @@ jobs:
       - name: Ensure PyYAML
         run: python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
 
+      - name: Install repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL --retry 3 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/repo" --version 2>&1 | head -5
+
       - name: Parse config.yml
         id: cfg
         run: |
@@ -55,18 +65,8 @@ jobs:
           eval "$(python3 scripts/parse_config.py config.yml --shell)"
           python3 scripts/parse_config.py config.yml --config-list > /dev/null
 
-          # clang 版本：优先 config.yml 覆盖，否则向源码仓库取 build.config.constants。
-          # 只用于给缓存起一个准确的 key；build.sh 会以检出的内核树为准再核一次。
-          CLANG_VER="${TOOLCHAIN_CLANG_VERSION}"
-          if [ -z "$CLANG_VER" ]; then
-            CLANG_VER="$(curl -fsSL --retry 3 \
-              "${KERNEL_REPO}/+/refs/heads/${KERNEL_BRANCH}/build.config.constants?format=TEXT" \
-              | base64 -d 2>/dev/null | sed -n 's/^CLANG_VERSION=//p' | head -1 | tr -d '[:space:]' \
-              || true)"
-          fi
-
           {
-            echo "clang_version=${CLANG_VER}"
+            echo "kernel_repo=${KERNEL_REPO}"
             echo "kernel_branch=${KERNEL_BRANCH}"
             echo "kernel_commit=${KERNEL_COMMIT}"
           } >> "$GITHUB_OUTPUT"
@@ -76,19 +76,20 @@ jobs:
             echo "KERNEL_BRANCH=${KERNEL_BRANCH}"
             echo "KERNEL_COMMIT=${KERNEL_COMMIT}"
             echo "TOOLCHAIN_CLANG_VERSION=${TOOLCHAIN_CLANG_VERSION}"
-            echo "TOOLCHAIN_CLANG_BRANCH=${TOOLCHAIN_CLANG_BRANCH}"
+            echo "SYNC_PROJECTS=${SYNC_PROJECTS}"
           } >> "$GITHUB_ENV"
 
-          echo "分支: ${KERNEL_BRANCH}  commit: ${KERNEL_COMMIT:-'(分支最新)'}  clang: ${CLANG_VER:-'(自动)'}"
+          echo "manifest: ${KERNEL_BRANCH}  commit: ${KERNEL_COMMIT:-'(manifest 给出的 revision)'}"
 
-      # 目录名带上版本号：即使缓存 key 撞错，build.sh 找的也是带版本的路径，
-      # 找不到就自己重新下载，绝不会误用别的 clang。
-      - name: Cache AOSP clang
-        if: steps.cfg.outputs.clang_version != ''
+      # repo 每次都要重新 clone，缓存 git 对象目录能让后续 sync 明显变快。
+      # 命中失败只是变慢，不会用错内容。
+      - name: Cache repo objects
         uses: actions/cache@v4
         with:
-          path: toolchain/clang-${{ steps.cfg.outputs.clang_version }}
-          key: aosp-clang-${{ steps.cfg.outputs.clang_version }}
+          path: .work/src/.repo/project-objects
+          key: repo-objects-${{ steps.cfg.outputs.kernel_branch }}-${{ github.run_id }}
+          restore-keys: |
+            repo-objects-${{ steps.cfg.outputs.kernel_branch }}-
 
       - name: Build
         run: bash scripts/build.sh
