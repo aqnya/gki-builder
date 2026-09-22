@@ -10,6 +10,10 @@ cd "$ROOT"
 
 export LC_ALL=C
 
+# AOSP 预编译 clang 所在仓库；下载形如
+#   $CLANG_REPO/+/refs/heads/<prebuilts分支>/clang-<版本>.tar.gz
+CLANG_REPO="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86"
+
 die() { echo "::error::$*" >&2; exit 1; }
 info() { echo "==> $*"; }
 note() { echo "    $*"; }
@@ -116,6 +120,7 @@ fetch_clang() {
 
 setup_toolchain() {
   resolve_clang_version
+  CLANG_BRANCH_USED=""
   CLANG_DIR="$TOOLCHAIN_ROOT/clang-$CLANG_VERSION"
   export CLANG_DIR CLANG_VERSION
   summary_lines+=("| clang | \`$CLANG_VERSION\` |")
