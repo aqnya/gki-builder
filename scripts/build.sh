@@ -210,6 +210,8 @@ apply_patches() {
       die "补丁 $name 无法应用。已回滚（--check 失败，源码树未被改动）。"
     fi
   done
+  git -C "$KERNEL_SRC" add .
+  git -C "$KERNEL_SRC" commit -m "no-dirty "
   summary_lines+=("| 补丁 | $count |")
 }
 
