@@ -84,7 +84,7 @@ sync_source() {
   (
     cd "$SRC"
     repo init -u "$KERNEL_REPO" -b "$KERNEL_BRANCH" \
-      --no-clone-bundle --quiet \
+      --no-clone-bundle --quiet --depth=1 \
       || die "repo init 失败（检查 kernel.repo / kernel.branch）"
 
     local pin="$SRC/.repo/local_manifests/pin-kernel-common.xml"
@@ -104,7 +104,7 @@ XML
     fi
 
     info "repo sync（${#PROJECTS[@]} 个项目）"
-    repo sync --no-clone-bundle --depth=1 --prune -j"$(nproc)" "${PROJECTS[@]}" \
+    repo sync --no-clone-bundle --prune -j"$(nproc)" "${PROJECTS[@]}" \
       || die "repo sync 失败"
   )
 
