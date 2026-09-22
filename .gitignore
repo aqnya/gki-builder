@@ -1,0 +1,11 @@
+/.work/
+/toolchain/
+/dist/
+.config.list.tmp
+build.env
+*.zip
+*.tar.gz
+*.tar.xz
+*.tar.zst
+__pycache__/
+*.pyc

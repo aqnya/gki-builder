@@ -1,0 +1,51 @@
+# gki-builder 唯一配置入口
+#
+# 改这里 + 推送到 main（或在 Actions 页面手动 Run workflow）就会触发编译。
+# 触发路径过滤见 .github/workflows/build.yml 的 on.push.paths。
+
+kernel:
+  # GKI 内核源码仓库
+  repo: https://android.googlesource.com/kernel/common
+  # kernel/common 的分支名（注意：没有 common- 前缀，那个是 kernel/manifest 的命名）
+  # 可选：android13-5.15 / android14-5.15 / android14-6.1 / android15-6.6 / android16-6.12
+  branch: android13-5.15
+  # 指定编译的 commit —— 唯一来源就在这里。
+  #   留空 ""  -> 编译 branch 最新提交
+  #   填 40 位 SHA -> 精确钉死到该 commit（推荐，保证可复现）
+  commit: ""
+
+# 生成 .config 用的 defconfig 目标
+defconfig: gki_defconfig
+arch: arm64
+
+toolchain:
+  # CLANG_VERSION 默认从内核树 build.config.constants 自动读取。
+  # android13-5.15 对应 r450784e。留空 = 自动；填了则覆盖。
+  clang_version: ""
+  # AOSP prebuilts 里承载该 clang 的分支，留空 = 按候选列表依次探测。
+  # 自动探测失败时（AOSP 会返回 200 + 占位空包）填这里。
+  # android13-5.15 / r450784e 实测可用：master-kernel-build-2022
+  clang_branch: ""
+
+patches:
+  # patch --fuzz = 允许忽略的上下文行数。0 最严格：上下文必须逐行命中。
+  # 注意它不管「补丁整体位置漂移」—— 那个 patch 自己会搜索，fuzz 管不着。
+  # 放宽可填 1~3（能容忍邻近几行因别的改动而变化）。
+  fuzz: 0
+
+# ------------------------------------------------------------------
+# 开关 config：value 即写入 .config 的取值
+#   y / n / m         -> 启用 / 禁用 / 编译为模块
+#   整数              -> CONFIG_X=1234
+#   其他字符串        -> CONFIG_X="字符串"
+# YAML 里 true/false 会分别当作 y/n 处理。
+#
+# 应用顺序：gki_defconfig -> 逐条 scripts/config -> make olddefconfig -> 回读校验。
+# 若某项因依赖不满足被 Kconfig 丢弃，构建会失败并列出差异（不会静默降级）。
+# ------------------------------------------------------------------
+config:
+  CONFIG_LOCALVERSION: "-gki-builder"
+  # CONFIG_KSU: y
+  # CONFIG_DEBUG_INFO: n
+  # CONFIG_SOME_MODULE: m
+  # CONFIG_CMDLINE: "androidboot.console=ttyMSM0"
