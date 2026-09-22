@@ -93,7 +93,7 @@ jobs:
       - name: install build tools and dep
         run: |
           sudo apt update
-          sudo apt install libelf
+          sudo apt install libelf-dev
 
       - name: Build
         run: bash scripts/build.sh
