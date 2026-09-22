@@ -90,10 +90,11 @@ jobs:
           key: repo-objects-${{ steps.cfg.outputs.kernel_branch }}-${{ github.run_id }}
           restore-keys: |
             repo-objects-${{ steps.cfg.outputs.kernel_branch }}-
+      # lz4 用于产出 Image.lz4（Image.gz 只依赖 gzip，始终会有）
       - name: install build tools and dep
         run: |
-          sudo apt update
-          sudo apt install libelf-dev
+          sudo apt-get update -qq
+          sudo apt-get install -y libelf-dev lz4
 
       - name: Build
         run: bash scripts/build.sh
@@ -105,9 +106,9 @@ jobs:
           path: |
             dist/Image
             dist/Image.gz
-            dist/*.dtb
-            dist/*.dtbo
             dist/*.lz4
+            dist/dtb
+            dist/dtbo.img
             dist/AnyKernel3.zip
             dist/kernel.config
           if-no-files-found: error
