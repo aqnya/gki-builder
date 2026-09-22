@@ -104,7 +104,7 @@ XML
     fi
 
     info "repo sync（${#PROJECTS[@]} 个项目）"
-    repo sync --no-clone-bundle --depth 1 --prune -j"$(nproc)" "${PROJECTS[@]}" \
+    repo sync --no-clone-bundle --depth=1 --prune -j"$(nproc)" "${PROJECTS[@]}" \
       || die "repo sync 失败"
   )
 
