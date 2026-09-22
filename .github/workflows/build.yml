@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 350
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # GitHub 只保证 14GB 可用空间，repo 同步（含 clang prebuilts）+ out/ 会超。
       # 先删掉 runner 上用不到的大件（官方 workaround 见 actions/virtual-environments#2840）。
@@ -84,7 +84,7 @@ jobs:
       # repo 每次都要重新 clone，缓存 git 对象目录能让后续 sync 明显变快。
       # 命中失败只是变慢，不会用错内容。
       - name: Cache repo objects
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .work/src/.repo/project-objects
           key: repo-objects-${{ steps.cfg.outputs.kernel_branch }}-${{ github.run_id }}
