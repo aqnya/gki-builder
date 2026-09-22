@@ -66,7 +66,7 @@ git ls-remote https://android.googlesource.com/kernel/common refs/heads/android1
 ### 3. 放补丁
 
 见 [`patches/README.md`](patches/README.md)。零填充文件名控制顺序，补丁打在 `common/` 目录上，
-`fuzz` 默认 0（严格）。
+用 `git apply` 严格匹配（无 fuzz，上下文必须逐行命中）。
 
 ## 源码怎么来的
 
@@ -125,7 +125,7 @@ python3 scripts/parse_config.py config.yml --config-list   # 看会被写进 .co
 bash -n scripts/build.sh                                   # 语法检查
 ```
 
-`scripts/build.sh` 也可以在本地跑完整流程，需要 git / make / patch / curl / python3(PyYAML)，
+`scripts/build.sh` 也可以在本地跑完整流程，需要 git / make / curl / python3(PyYAML)，
 会自动下载 `repo` 工具，并且要拉得动 `android.googlesource.com`。
 
 ## 工作原理
@@ -138,7 +138,7 @@ config.yml ──► parse_config.py ──► 校验 ──► build.sh
       ├─ 有 commit 就写 local_manifests/pin-kernel-common.xml
       └─ repo sync（只拉需要的项目）
    3. 读 CLANG_VERSION，清掉用不到的历史 clang 版本省磁盘
-   4. patches/*.patch 按序 dry-run 后应用到 common/
+   4. patches/*.patch 按序 git apply --check 后应用到 common/
    5. gki_defconfig → scripts/config → olddefconfig → 回读校验
    6. make Image
    7. 打包 Image + AnyKernel3.zip → upload-artifact

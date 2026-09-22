@@ -114,7 +114,6 @@ class Config:
         "arch",
         "clang_version",
         "projects",
-        "fuzz",
         "toggles",
     )
 
@@ -163,14 +162,6 @@ def parse(path: str) -> Config:
         projects.append(item)
     cfg.projects = projects
 
-    patches = _mapping(top, "patches")
-    fuzz = patches.get("fuzz", 0)
-    if isinstance(fuzz, bool) or not isinstance(fuzz, int):
-        raise ConfigError(f"'patches.fuzz' 必须是 0-99 的整数，实际是 {fuzz!r}")
-    if not 0 <= fuzz <= 99:
-        raise ConfigError(f"'patches.fuzz' 必须在 0-99 之间，实际是 {fuzz}")
-    cfg.fuzz = fuzz
-
     raw_config = _mapping(top, "config")
     toggles: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -193,7 +184,6 @@ def emit_shell(cfg: Config) -> None:
         "DEFCONFIG": cfg.defconfig,
         "ARCH": cfg.arch,
         "TOOLCHAIN_CLANG_VERSION": cfg.clang_version,
-        "PATCH_FUZZ": str(cfg.fuzz),
         "SYNC_PROJECTS": " ".join(cfg.projects),
         "TOGGLE_COUNT": str(len(cfg.toggles)),
     }

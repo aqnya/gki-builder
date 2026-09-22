@@ -29,7 +29,6 @@ note() { echo "    $*"; }
 
 command -v git   >/dev/null || die "缺少 git"
 command -v make  >/dev/null || die "缺少 make"
-command -v patch >/dev/null || die "缺少 patch"
 command -v curl  >/dev/null || die "缺少 curl"
 python3 -c "import yaml" 2>/dev/null || die "缺少 PyYAML（pip install pyyaml）"
 
@@ -193,22 +192,22 @@ apply_patches() {
     return
   fi
 
-  info "应用 ${#files[@]} 个补丁到 common/ （fuzz=$PATCH_FUZZ）"
+  info "应用 ${#files[@]} 个补丁到 common/"
   local p name
   for p in "${files[@]}"; do
     name="$(basename "$p")"
-    # 先 dry-run，避免留下半打补丁的树
-    if patch -d "$KERNEL_SRC" -p1 --fuzz="$PATCH_FUZZ" --dry-run --silent < "$p" >/dev/null 2>&1; then
-      patch -d "$KERNEL_SRC" -p1 --fuzz="$PATCH_FUZZ" --silent < "$p" >/dev/null
+    # 先 --check 试打，避免留下半打补丁的树；git apply 默认 -p1，上下文严格匹配
+    if git -C "$KERNEL_SRC" apply --check "$p" >/dev/null 2>&1; then
+      git -C "$KERNEL_SRC" apply "$p" >/dev/null
       note "已应用 $name"
       count=$((count + 1))
-    elif patch -d "$KERNEL_SRC" -p1 -R --fuzz="$PATCH_FUZZ" --dry-run --silent < "$p" >/dev/null 2>&1; then
+    elif git -C "$KERNEL_SRC" apply -R --check "$p" >/dev/null 2>&1; then
       note "跳过 $name（已应用过）"
     else
       echo "::group::补丁失败详情：$name"
-      patch -d "$KERNEL_SRC" -p1 --fuzz="$PATCH_FUZZ" --dry-run < "$p" 2>&1 | tail -40 || true
+      git -C "$KERNEL_SRC" apply --check "$p" 2>&1 | tail -40 || true
       echo "::endgroup::"
-      die "补丁 $name 无法应用。已回滚（dry-run 失败，源码树未被改动）。"
+      die "补丁 $name 无法应用。已回滚（--check 失败，源码树未被改动）。"
     fi
   done
   summary_lines+=("| 补丁 | $count |")
