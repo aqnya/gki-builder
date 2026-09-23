@@ -1,6 +1,6 @@
-commit 7edd5cf3722ddbdb27c4899180b206f508501ebb
+commit 5b428d27af05451232062f4d983654ed5e80745e
 Author: aqnya <xiaweilan56@gmail.com>
-Date:   Wed Sep 23 09:28:05 2026 +0800
+Date:   Wed Sep 23 09:49:37 2026 +0800
 
     backport: add ntsync.
 
@@ -37,10 +37,10 @@ index a109b9cb6..b299210a6 100644
 +obj-$(CONFIG_NTSYNC)		+= ntsync.o
 diff --git a/drivers/misc/ntsync.c b/drivers/misc/ntsync.c
 new file mode 100644
-index 000000000..41b8ccab5
+index 000000000..ae3cde5b1
 --- /dev/null
 +++ b/drivers/misc/ntsync.c
-@@ -0,0 +1,1259 @@
+@@ -0,0 +1,1269 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * ntsync.c - Kernel driver for NT synchronization primitives
@@ -811,12 +811,22 @@ index 000000000..41b8ccab5
 +
 +static int ntsync_obj_get_fd(struct ntsync_obj *obj)
 +{
-+	FD_PREPARE(fdf, O_CLOEXEC,
-+		   anon_inode_getfile("ntsync", &ntsync_obj_fops, obj, O_RDWR));
-+	if (fdf.err)
-+		return fdf.err;
-+	obj->file = fd_prepare_file(fdf);
-+	return fd_publish(fdf);
++	struct file *file;
++	int fd;
++
++	fd = get_unused_fd_flags(O_CLOEXEC);
++	if (fd < 0)
++		return fd;
++
++	file = anon_inode_getfile("ntsync", &ntsync_obj_fops, obj, O_RDWR);
++	if (IS_ERR(file)) {
++		put_unused_fd(fd);
++		return PTR_ERR(file);
++	}
++
++	obj->file = file;
++	fd_install(fd, file);
++	return fd;
 +}
 +
 +static int ntsync_create_sem(struct ntsync_device *dev, void __user *argp)
@@ -976,7 +986,7 @@ index 000000000..41b8ccab5
 +	if (args->alert)
 +		fds[count] = args->alert;
 +
-+	q = kmalloc_flex(*q, entries, total_count);
++	q = kmalloc(struct_size(q, entries, total_count), GFP_KERNEL);
 +	if (!q)
 +		return -ENOMEM;
 +	q->task = current;
