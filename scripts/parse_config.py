@@ -115,6 +115,7 @@ class Config:
         "clang_version",
         "projects",
         "toggles",
+        "ak3_kernel_string",
     )
 
 
@@ -173,6 +174,11 @@ def parse(path: str) -> Config:
         toggles.append((symbol, _normalize_value(symbol, value)))
     cfg.toggles = toggles
 
+    ak3 = _mapping(top, "ak3")
+    cfg.ak3_kernel_string = _str(ak3, "kernel_string", "ak3")
+    if any(ch in cfg.ak3_kernel_string for ch in "\r\n"):
+        raise ConfigError("'ak3.kernel_string' 不能包含换行（它会被写进 anykernel.sh 的一行）")
+
     return cfg
 
 
@@ -186,6 +192,7 @@ def emit_shell(cfg: Config) -> None:
         "TOOLCHAIN_CLANG_VERSION": cfg.clang_version,
         "SYNC_PROJECTS": " ".join(cfg.projects),
         "TOGGLE_COUNT": str(len(cfg.toggles)),
+        "AK3_KERNEL_STRING": cfg.ak3_kernel_string,
     }
     for key, value in values.items():
         print(f"export {key}={shlex.quote(value)}")

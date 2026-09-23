@@ -74,22 +74,31 @@ git ls-remote https://android.googlesource.com/kernel/common refs/heads/android1
 打包用的 AnyKernel3 模板就在仓库的 [`ak3/`](ak3/) 里，**构建时不再去 clone 上游**——
 `ak3/anykernel.sh` 就是你改的那份，直接编辑并提交即可（改动会命中 `ak3/**`，自动触发编译）。
 
-至少要改这两处，否则刷到真机上会被 devicecheck 拦下：
+现在已经按目标设备 **Redmi vermeer**（kalama / 5.15 GKI，A/B）配好了：
 
 ```sh
 # ak3/anykernel.sh
 properties() { '
-kernel.string=...            # 每次构建会被自动覆盖成 GKI <branch> (<sha12>)
-do.devicecheck=1             # 1 = 校验设备名，填错就直接拒绝安装
-device.name1=你的设备代号      # 上游示例是 maguro/toro/toroplus/tuna
+do.devicecheck=1             # 1 = 校验设备名，对不上就直接拒绝安装
+device.name1=vermeer         # devicecheck 比对 ro.product.device
 '; }
 
-BLOCK=/dev/block/by-name/boot;   # 上游示例是 omap 的路径，GKI 设备一般是 by-name
+BLOCK=boot;                  # 内核在 boot；A/B 会自己接 _a/_b
+IS_SLOT_DEVICE=1;
+split_boot; flash_boot;      # ramdisk 在 init_boot：只换 Image，绝不碰 ramdisk
 ```
 
-其它可改的：`do.modules`（要不要刷 modules）、`do.systemless`、`do.cleanup`、
-`ramdisk/`（overlay.d 里要放的文件）、`patch/`（要打进 ramdisk 的补丁）。
-详细说明见上游仓库 [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3)。
+**换设备/换模块时要注意的点**（细节记在 [`ak3/README.md`](ak3/README.md)）：
+
+- `device.name1` 填设备代号（设备上 `getprop ro.product.device` 的值），否则刷机时被 devicecheck 拒掉。
+- `BLOCK` 写分区名（`boot` / `init_boot` / `vendor_boot`）而不是路径，A/B 由 `IS_SLOT_DEVICE=1` 处理。
+- Android 13+ 的 GKI 设备，内核在 `boot`、ramdisk 在 `init_boot`：用 `split_boot` + `flash_boot`
+  （只换内核）。写成 `dump_boot` + `write_boot` 会把空的占位 ramdisk 写回 boot，**会变砖**。
+- 其它可改的：`do.modules`、`do.systemless`、`do.cleanup`、`ramdisk/`、`patch/`。
+
+`kernel.string`（刷机时打印的那行）默认保留 `ak3/anykernel.sh` 里自己写的那串，
+只有它还是上游示例时才自动填成 `GKI <branch> (<sha12>)`；想每次强制成固定文案，
+在 `config.yml` 里填 `ak3.kernel_string`。
 
 > 构建时会 `cp -a ak3/ .work/AnyKernel3` 再往里塞 `Image`，所以仓库里的 `ak3/` 一直是干净的。
 

@@ -30,6 +30,14 @@ sync:
   # 只 sync 需要的能省不少磁盘和时间。要更多项目（比如 virtual-device）就在这里加。
   projects: []
 
+# 刷机包（AnyKernel3）。模板本体在 ak3/ 目录里，构建时直接用它，不再 clone 上游。
+ak3:
+  # 刷机包里显示的 kernel.string（recovery 刷入时打印的那行）。
+  #   留空 ""   -> 用 ak3/anykernel.sh 里自己写的那串；它还是上游示例时才自动填
+  #               "GKI <branch> (<sha12>)"
+  #   填字符串  -> 每次构建都强制写成这串
+  kernel_string: ""
+
 # ------------------------------------------------------------------
 # 开关 config：value 即写入 .config 的取值
 #   y / n / m         -> 启用 / 禁用 / 编译为模块

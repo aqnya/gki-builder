@@ -394,14 +394,33 @@ package() {
   rm -rf "$ak3/.git"
 
   cp "$DIST/Image" "$ak3/Image"
-  sed -i "s/^kernel.string=.*/kernel.string=GKI ${KERNEL_BRANCH} (${KERNEL_SHA:0:12})/" \
-    "$ak3/anykernel.sh" 2>/dev/null || true
+
+  # kernel.string：config.yml 的 ak3.kernel_string 给了就每次都写死；没给时
+  # 只在 anykernel.sh 还是上游示例（或压根没这行）时才自动填，
+  # 这样你自己写的那串不会被每次构建悄悄覆盖。
+  local kstr="${AK3_KERNEL_STRING:-}" current=""
+  current="$(sed -n 's/^kernel\.string=//p' "$ak3/anykernel.sh" | tail -1)"
+  if [[ -n "$kstr" ]] || [[ -z "$current" || "$current" == *"ExampleKernel by osm0sis"* ]]; then
+    kstr="${kstr:-GKI $KERNEL_BRANCH (${KERNEL_SHA:0:12})}"
+    # awk 而不是 sed：替换串里带 & | \ 之类都不用转义
+    AK3_KERNEL_STRING="$kstr" awk '
+      BEGIN { s = ENVIRON["AK3_KERNEL_STRING"] }
+      /^kernel\.string=/ { print "kernel.string=" s; written = 1; next }
+      { print }
+      END { if (!written) print "kernel.string=" s }
+    ' "$ak3/anykernel.sh" > "$ak3/anykernel.sh.new"
+    cat "$ak3/anykernel.sh.new" > "$ak3/anykernel.sh"   # 覆写而非 mv：保住原有的可执行位
+    rm -f "$ak3/anykernel.sh.new"
+    note "kernel.string = $kstr"
+  else
+    note "kernel.string 保持 anykernel.sh 里的：$current"
+  fi
 
   # 模板还带着上游示例值就提醒一声：devicecheck 是拿示例设备名（maguro 等）校验的，
   # 刷到真机上会被直接拒绝安装 —— 免得下完包刷失败才发现。
   if grep -q '^device\.name1=maguro' "$ak3/anykernel.sh" \
-     || grep -q 'ExampleKernel by osm0sis' "$ak3/anykernel.sh"; then
-    echo "::warning::ak3/anykernel.sh 还是上游示例（device.name1=maguro / ExampleKernel）：按示例里的设备名做 devicecheck，刷到真机上会被拒绝。记得改 device.name* 和 BLOCK。"
+     || grep -q 'omap_hsmmc' "$ak3/anykernel.sh"; then
+    echo "::warning::ak3/anykernel.sh 还是上游示例（device.name1=maguro / omap 的 BLOCK）：devicecheck 按示例设备名校验、BLOCK 也指向别的分区，刷到真机上会被拒绝。记得改成自己的 device.name* 和 BLOCK。"
     summary_lines+=("| AK3 模板 | ⚠️ anykernel.sh 仍是上游示例（device.name/BLOCK 未改） |")
   else
     summary_lines+=("| AK3 模板 | \`ak3/anykernel.sh\`（仓库自带） |")
