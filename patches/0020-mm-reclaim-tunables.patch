@@ -1,0 +1,39 @@
+diff --git a/fs/dcache.c b/fs/dcache.c
+index 06db7c5f3..b177f35b4 100644
+--- a/fs/dcache.c
++++ b/fs/dcache.c
+@@ -71,7 +71,7 @@
+  * If no ancestor relationship:
+  * arbitrary, since it's serialized on rename_lock
+  */
+-int sysctl_vfs_cache_pressure __read_mostly = 100;
++int sysctl_vfs_cache_pressure __read_mostly = 50;
+ EXPORT_SYMBOL_GPL(sysctl_vfs_cache_pressure);
+ 
+ __cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
+diff --git a/mm/compaction.c b/mm/compaction.c
+index 79894f53c..a9a8490af 100644
+--- a/mm/compaction.c
++++ b/mm/compaction.c
+@@ -2781,7 +2781,7 @@ static void compact_nodes(void)
+  * aggressively the kernel should compact memory in the
+  * background. It takes values in the range [0, 100].
+  */
+-unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
++unsigned int __read_mostly sysctl_compaction_proactiveness = 10;
+ 
+ int compaction_proactiveness_sysctl_handler(struct ctl_table *table, int write,
+ 		void *buffer, size_t *length, loff_t *ppos)
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index a5fb0cedb..95aa3fb5a 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -434,7 +434,7 @@ compound_page_dtor * const compound_page_dtors[NR_COMPOUND_DTORS] = {
+ 
+ int min_free_kbytes = 1024;
+ int user_min_free_kbytes = -1;
+-int watermark_boost_factor __read_mostly = 15000;
++int watermark_boost_factor __read_mostly = 0;
+ int watermark_scale_factor = 10;
+ 
+ static unsigned long nr_kernel_pages __initdata;
