@@ -293,6 +293,36 @@ build_image() {
   [[ -f "$OUT/arch/$ARCH/boot/Image" ]] || die "编译结束但找不到 Image"
 }
 
+# ------------------------------------------------- 5.5 KMI 护栏（防刷机变砖）
+# 设备上 293 个厂商模块一共 import 了 2329 个内核符号（名单见
+# scripts/kmi-required-symbols.txt）。少任何一个，对应模块就会 insmod 失败：
+# qce50_dlkm 起不来 /data 就解不开密，msm_kgsl 起不来就没有显示 ——
+# 表现是「卡 logo 不开机」，而且不是 panic，抓不到崩溃日志，只能靠二分。
+# 这一步把「刷了才知道炸」提前成「构建就报错」。
+# 紧急绕过（不推荐）：SKIP_KMI_CHECK=1
+check_kmi() {
+  if [[ "${SKIP_KMI_CHECK:-}" == "1" ]]; then
+    echo "::warning::SKIP_KMI_CHECK=1，已跳过 KMI 护栏（若删了厂商模块依赖的符号，会不开机）"
+    summary_lines+=("| KMI 护栏 | ⚠️ 被 SKIP_KMI_CHECK 跳过 |")
+    return 0
+  fi
+
+  local vmlinux="$OUT/vmlinux" list="$ROOT/scripts/kmi-required-symbols.txt"
+  [[ -f "$vmlinux" ]] || die "找不到 $vmlinux，无法做 KMI 校验"
+  [[ -f "$list" ]]    || die "找不到 KMI 护栏名单 $list"
+
+  info "KMI 护栏：校验厂商模块依赖的符号是否都还在"
+  local out rc=0
+  out="$(python3 "$ROOT/scripts/kmi_check.py" "$vmlinux" "$list" 2>&1)" || rc=$?
+  if (( rc != 0 )); then
+    printf '%s\n' "$out" >&2
+    die "KMI 护栏未通过 —— 本次改动删掉了厂商模块依赖的内核符号，刷进去会不开机"
+  fi
+
+  note "$(printf '%s\n' "$out" | head -1)"
+  summary_lines+=("| KMI 护栏 | ✅ $(grep -cv '^[[:space:]]*#' "$list") 个厂商依赖符号齐全 |")
+}
+
 # ------------------------------------------------------------ 6. 打包
 package() {
   info "收集产物"
@@ -347,6 +377,7 @@ main() {
   generate_config
   verify_config
   build_image
+  check_kmi
   package
   write_summary
   info "完成，产物在 $DIST"

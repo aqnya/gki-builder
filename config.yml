@@ -47,6 +47,51 @@ config:
   CONFIG_LRU_GEN_ENABLED: y
   CONFIG_LOCALVERSION: "-android13-8"
   CONFIG_NTSYNC: y
+
+  # ---- 省电批次 1 ----
+  # 每一项都对照过设备上 293 个厂商模块、2329 个「内核必须导出」的符号：0 引用。
+  # 构建时 scripts/build.sh 的 KMI 护栏会再校验一遍（删到不该删的符号直接 FAIL）。
+  #
+  # 每次分配都 memset 清零 —— 关掉省全系统的内存带宽/CPU。
+  # （代价：未初始化内存泄露的硬化没了，这是 Android 的默认防泄露项，介意就删掉这行）
+  CONFIG_INIT_ON_ALLOC_DEFAULT_ON: n
+  # 调度统计记账：设备上 sched_schedstats=1，确实在每次调度时记账
+  CONFIG_SCHEDSTATS: n
+  # KFENCE 抽样：设备上 sample_interval=500，确实在跑（STATIC_KEYS 下开销不大）
+  CONFIG_KFENCE: n
+
+  # ---- 省电批次 2：纯「统计/调试」开销，关掉不影响功能、也不掉任何符号 ----
+  # 同样逐项对照过那 2329 个符号：全部 0 引用。
+  # 每次中断都读 sched_clock 做 irq 时间记账（代价：/proc/stat 的 irq 字段精度下降）
+  CONFIG_IRQ_TIME_ACCOUNTING: n
+  # 每 tick 给任务记 RSS/VM 扩展账（taskstats netlink API 本身保留）
+  CONFIG_TASK_XACCT: n
+  # /sys/kernel/kheaders.tar.xz，白占内存
+  CONFIG_IKHEADERS: n
+  # 页归属 / 页钉住跟踪（默认就没开，纯占内存与代码）
+  CONFIG_PAGE_OWNER: n
+  CONFIG_PAGE_PINNER: n
+  # trace 直方图触发器、内核函数错误注入、workqueue 看门狗（每 30s 扫一遍）
+  CONFIG_HIST_TRIGGERS: n
+  CONFIG_FUNCTION_ERROR_INJECTION: n
+  CONFIG_WQ_WATCHDOG: n
+
+  # ---- 待定：真正影响「息屏待机」的一项，风险与收益都大，单独一轮再试 ----
+  # CONFIG_RCU_LAZY_DEFAULT_OFF: n   # 打开 RCU 惰性回调（设备 cmdline 已有 rcu_nocbs=0-7，
+  #                                  # 条件齐了）：空闲 CPU 不再被 RCU 回调唤醒，是 Google
+  #                                  # 后来给 Android 的省电项。但设备带了
+  #                                  # kernel.panic_on_rcu_stall=1 —— 一旦出现 RCU stall 会直接
+  #                                  # panic 重启，且护栏（符号）挡不住这种运行时问题，
+  #                                  # 所以别和别的改动混在同一轮里刷。
+
+  # ⚠️ 下面这些看着「只是调试」，但厂商模块 import 了它们提供的符号，
+  #    关掉 = 模块 insmod 失败 = 卡 logo 不开机（已实测，两次刷机都挂在这）：
+  #      CONFIG_KASAN / KASAN_HW_TAGS: n → 丢 kasan_flag_enabled（15 个模块要，含 qce50_dlkm）
+  #      CONFIG_DEBUG_LIST: n            → 丢 __list_add_valid / __list_del_entry_valid
+  #      CONFIG_SOFTLOCKUP_DETECTOR: n   → 丢 touch_softlockup_watchdog
+  #      改抢占模型（PREEMPT_NONE 等）    → 丢 preempt_schedule / preempt_schedule_notrace
+  #      CONFIG_CFI_CLANG: n             → 丢 __ubsan_handle_cfi_check_fail_abort（293 个全要）
+  #    完整名单与原因见 scripts/kmi-required-symbols.txt
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m

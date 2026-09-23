@@ -39,8 +39,21 @@ git -C .work/src/common diff > patches/0001-my-change.patch
 git -C .work/src/common format-patch -1 -o patches/
 ```
 
-## 注意
+## 注意：KMI 符号约束（真的会把机器刷成砖）
 
-GKI 有 KMI / ABI 符号约束。改动导出符号、`EXPORT_SYMBOL` 列表或
-`android/abi_gki_*` 相关内容时，可能触发 ABI 检查失败——这类补丁通常需要
-连带更新 symbol list，而不只是一个 `.patch` 文件。
+GKI 内核之上跑着一堆**二进制**厂商模块（本机 `/vendor/lib/modules/` 有 293 个），
+它们 import 的内核符号必须由 GKI 内核导出。**少一个，对应模块就 insmod 失败**，
+而失败的是 qce50_dlkm（/data 的 FBE 解密）、msm_kgsl（显示）、cfg80211/rmnet
+（WiFi/数据网）这种要命的东西 —— 表现是**卡 logo 不开机**。而且它不是 panic，
+所以崩溃日志、`/data` 里的 crashlog 都抓不到，只能靠二分定位。
+
+这不是理论：2026-09 的两次刷机失败就是这么来的（`CONFIG_KASAN=n` 丢掉了
+`kasan_flag_enabled`）。
+
+所以本仓库加了一道护栏：`scripts/build.sh` 的 **`check_kmi`** 步骤会在编译后拿
+`vmlinux` 的导出符号（`__ksymtab_strings`）和 **`scripts/kmi-required-symbols.txt`**
+（本机 293 个厂商模块真实依赖的 2329 个内核符号）比对，缺任何一个就 **FAIL**。
+名单的来历和重新生成方法写在该文件头部。
+
+改 `CONFIG_*` 或补丁时，护栏报错就是"这一改会不开机"，别用
+`SKIP_KMI_CHECK=1` 绕过去 —— 那等于直接刷砖。
