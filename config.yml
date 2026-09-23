@@ -47,88 +47,13 @@ config:
   CONFIG_LRU_GEN_ENABLED: y
   CONFIG_LOCALVERSION: "-android13-8"
   CONFIG_NTSYNC: y
-
-  # ==================================================================
-  # ⚠️ 教训（2026-09-23 实测，卡 logo 第三次）：**符号护栏全绿照样不开机**。
-  # 原因不是缺符号，而是【结构体布局】变了：厂商模块是拿 gki_defconfig
-  # （这些项全是 =y）的头文件编的，struct task_struct 之类里的字段偏移
-  # 已经被烤进 .ko 二进制。偏移一错，模块读到的就是野指针，早期就崩，
-  # 还没到能打日志的地方 —— 所以「不是 panic、抓不到 crashlog」。
-  # 规则：凡是出现在【模块可见头文件的结构体定义里】的 #ifdef CONFIG_*，
-  #       一律不能动（符号名单查不出来，KASAN 那次也是同一个坑）。
-  # ==================================================================
-
-  # ---- 可以关：逐项确认过不改任何模块可见结构体的布局 ----
-  # 每次分配都 memset 清零 —— 关掉省全系统的内存带宽/CPU。
-  # 只动 include/linux/mm.h 里的 static key（DECLARE_STATIC_KEY_MAYBE），无布局影响。
-  # （代价：未初始化内存泄露的硬化没了，这是 Android 的默认防泄露项，介意就删掉这行）
-  CONFIG_INIT_ON_ALLOC_DEFAULT_ON: n
-  # KFENCE 抽样：设备上 sample_interval=500 确实在跑。只出现在 include/linux/kfence.h，
-  # 全是宏与函数声明，不碰 struct page 等模块可见结构体。
-  CONFIG_KFENCE: n
-  # 每次中断都读 sched_clock 做 irq 时间记账（代价：/proc/stat 的 irq 字段精度下降）。
-  # CONFIG_IRQ_TIME_ACCOUNTING 在 include/ 里只有 vtime.h / sched/clock.h 的
-  # 静态内联与函数声明；struct irqtime 属于 kernel/sched/sched.h 的 struct rq，内核内部。
-  CONFIG_IRQ_TIME_ACCOUNTING: n
-  # /sys/kernel/kheaders.tar.xz，白占内存。include/ 里完全没有它。
-  CONFIG_IKHEADERS: n
-  # trace 直方图触发器。include/ 里完全没有它。
-  CONFIG_HIST_TRIGGERS: n
-  # workqueue 看门狗（每 30s 扫一遍）。include/linux/workqueue.h 里只有函数声明。
-  CONFIG_WQ_WATCHDOG: n
-
-  # ---- 🚫 不能关：会改 struct task_struct / struct module 的布局（关了就卡 logo）----
-  # 调度统计记账。CONFIG_SCHEDSTATS=n 会把 struct sched_statistics 里 29 个 u64 全部
-  # #ifdef 掉，而 struct sched_entity 里那个字段是无条件保留的 → sched_entity 之后的
-  # 【每一个字段】偏移前移约 232 字节。附带 CONFIG_SCHED_INFO 也被它 select 掉。
-  CONFIG_SCHEDSTATS: y
-  # 每 tick 给任务记 RSS/VM 扩展账（taskstats netlink API 不受影响）。
-  # 关掉会让 task_struct 少 acct_rss_mem1/acct_vm_mem1/acct_timexpd 三个 u64 → 前移 24 字节。
-  CONFIG_TASK_XACCT: y
-  # 页归属跟踪（运行时要 page_owner=on 才真正启用，平时≈0 开销，收益本来就是假的）。
-  # 关掉会让 task_struct 少 in_page_owner:1 这个位域 —— 位域共享存储单元，
-  # 摘掉一个会挪动同单元里后续位域的位置，甚至塌掉 4 字节。
-  CONFIG_PAGE_OWNER: y
-  # 页钉住跟踪（同样要 boot param 才启用，收益≈0）。走 page_ext（内核内部数组），
-  # 收益为 0 而风险不为 0，干脆留着。
-  CONFIG_PAGE_PINNER: y
-  # 内核函数错误注入（debugfs 才用得上）。它在 include/linux/module.h 的
-  # struct module 里加了 ei_funcs/num_ei_funcs 两个成员。
-  CONFIG_FUNCTION_ERROR_INJECTION: y
-
-  # ---- 网络：启用 BBR 拥塞控制 ----
-  # 现状：gki_defconfig 没开 TCP_CONG_ADVANCED，设备上
-  #   /proc/sys/net/ipv4/tcp_available_congestion_control = "reno cubic"
-  # 所以得先开菜单，再把 BBR 编进内核并设为默认（BBR 要 =y 才能出现在默认选择的 choice 里）。
-  # BBR 自己不做「省电」，但在蜂窝/WiFi 上靠 pacing 削缓冲膨胀、少触发重传，
-  # 间接减少无线侧发射时间。想临时退回（cubic 仍在内核里，不用重刷）：
-  #   su -c 'sysctl -w net.ipv4.tcp_congestion_control=cubic'
-  # 前提 NET_SCH_FQ=y（BBR 的 pacing 要 fq 队列），gki_defconfig 已经有了。
   CONFIG_TCP_CONG_ADVANCED: y
   CONFIG_TCP_CONG_BBR: y
-  CONFIG_DEFAULT_BBR: y          # choice 里的 BBR 项，据此把 DEFAULT_TCP_CONG 算成 "bbr"
-  CONFIG_DEFAULT_TCP_CONG: bbr   # 冗余但写上：回读校验会证明它确实变成了 "bbr"
-  # 开了 ADVANCED 后，这三项在 Kconfig 里默认是 m（会平白多编 3 个 .ko），钉回 n 保持现状。
+  CONFIG_DEFAULT_BBR: y
+  CONFIG_DEFAULT_TCP_CONG: bbr
   CONFIG_TCP_CONG_BIC: n
   CONFIG_TCP_CONG_WESTWOOD: n
   CONFIG_TCP_CONG_HTCP: n
-
-  # ---- 待定：真正影响「息屏待机」的一项，风险与收益都大，单独一轮再试 ----
-  # CONFIG_RCU_LAZY_DEFAULT_OFF: n   # 打开 RCU 惰性回调（设备 cmdline 已有 rcu_nocbs=0-7，
-  #                                  # 条件齐了）：空闲 CPU 不再被 RCU 回调唤醒，是 Google
-  #                                  # 后来给 Android 的省电项。但设备带了
-  #                                  # kernel.panic_on_rcu_stall=1 —— 一旦出现 RCU stall 会直接
-  #                                  # panic 重启，且护栏（符号）挡不住这种运行时问题，
-  #                                  # 所以别和别的改动混在同一轮里刷。
-
-  # ⚠️ 下面这些看着「只是调试」，但厂商模块 import 了它们提供的符号，
-  #    关掉 = 模块 insmod 失败 = 卡 logo 不开机（已实测，两次刷机都挂在这）：
-  #      CONFIG_KASAN / KASAN_HW_TAGS: n → 丢 kasan_flag_enabled（15 个模块要，含 qce50_dlkm）
-  #      CONFIG_DEBUG_LIST: n            → 丢 __list_add_valid / __list_del_entry_valid
-  #      CONFIG_SOFTLOCKUP_DETECTOR: n   → 丢 touch_softlockup_watchdog
-  #      改抢占模型（PREEMPT_NONE 等）    → 丢 preempt_schedule / preempt_schedule_notrace
-  #      CONFIG_CFI_CLANG: n             → 丢 __ubsan_handle_cfi_check_fail_abort（293 个全要）
-  #    完整名单与原因见 scripts/kmi-required-symbols.txt
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
