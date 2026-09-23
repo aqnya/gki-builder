@@ -1,0 +1,309 @@
+diff --git a/drivers/char/Kconfig b/drivers/char/Kconfig
+index d454428f4..b5cc58869 100644
+--- a/drivers/char/Kconfig
++++ b/drivers/char/Kconfig
+@@ -464,4 +464,16 @@ config RANDOM_TRUST_BOOTLOADER
+ 	  believe its RNG facilities may be faulty. This may also be configured
+ 	  at boot time with "random.trust_bootloader=on/off".
+ 
++config FAKE_UNAME
++	bool "Fake uname via /dev/fakeuname"
++	default y
++	help
++	  Expose /dev/fakeuname (0644, root-writable) so privileged
++	  userspace can override the utsname fields (sysname, nodename,
++	  release, version, machine, domainname) returned by uname(2),
++	  gethostname(2), /proc/version and /proc/sys/kernel/*, keeping
++	  all of those surfaces consistent with each other.
++
++	  If unsure, say Y.
++
+ endmenu
+diff --git a/drivers/char/Makefile b/drivers/char/Makefile
+index 264eb398f..31e220c9f 100644
+--- a/drivers/char/Makefile
++++ b/drivers/char/Makefile
+@@ -46,3 +46,4 @@ obj-$(CONFIG_PS3_FLASH)		+= ps3flash.o
+ obj-$(CONFIG_XILLYBUS_CLASS)	+= xillybus/
+ obj-$(CONFIG_POWERNV_OP_PANEL)	+= powernv-op-panel.o
+ obj-$(CONFIG_ADI)		+= adi.o
++obj-$(CONFIG_FAKE_UNAME)	+= fakeuname.o
+diff --git a/drivers/char/fakeuname.c b/drivers/char/fakeuname.c
+new file mode 100644
+index 000000000..7fc738c3b
+--- /dev/null
++++ b/drivers/char/fakeuname.c
+@@ -0,0 +1,225 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * fakeuname - configurable fake utsname exposed through /dev/fakeuname
++ *
++ * Userspace (root) writes "key=value" lines to override the six utsname
++ * fields system-wide:
++ *
++ *	enable=0|1
++ *	sysname=... nodename=... release=... version=... machine=...
++ *	domainname=...
++ *
++ * uname(2), gethostname(2), /proc/version and
++ * /proc/sys/kernel/{ostype,osrelease,version,hostname,domainname} all
++ * read the same init_uts_ns.name storage under uts_sem, so they stay
++ * consistent and cannot be cross-checked against each other.
++ */
++
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/module.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++#include <linux/utsname.h>
++
++#define FAKE_BUF_MAX	1024
++
++enum {
++	FAKE_SYSNAME,
++	FAKE_NODENAME,
++	FAKE_RELEASE,
++	FAKE_VERSION,
++	FAKE_MACHINE,
++	FAKE_DOMAINNAME,
++	FAKE_NFIELDS,
++};
++
++static const char * const fake_keys[FAKE_NFIELDS] = {
++	[FAKE_SYSNAME]		= "sysname",
++	[FAKE_NODENAME]		= "nodename",
++	[FAKE_RELEASE]		= "release",
++	[FAKE_VERSION]		= "version",
++	[FAKE_MACHINE]		= "machine",
++	[FAKE_DOMAINNAME]	= "domainname",
++};
++
++static const size_t fake_offs[FAKE_NFIELDS] = {
++	[FAKE_SYSNAME]		= offsetof(struct new_utsname, sysname),
++	[FAKE_NODENAME]		= offsetof(struct new_utsname, nodename),
++	[FAKE_RELEASE]		= offsetof(struct new_utsname, release),
++	[FAKE_VERSION]		= offsetof(struct new_utsname, version),
++	[FAKE_MACHINE]		= offsetof(struct new_utsname, machine),
++	[FAKE_DOMAINNAME]	= offsetof(struct new_utsname, domainname),
++};
++
++static bool fake_enabled;
++static unsigned int fake_mask;		/* fields with configured fakes */
++static struct new_utsname fake_vals;	/* configured fake values */
++static struct new_utsname fake_orig;	/* real values saved at enable */
++
++static char *field_ptr(struct new_utsname *n, int i)
++{
++	return (char *)n + fake_offs[i];
++}
++
++/*
++ * Copy all masked fake fields into init_uts_ns.name.
++ * Caller must hold uts_sem for write.
++ */
++static void fake_apply_locked(void)
++{
++	int i;
++
++	for (i = 0; i < FAKE_NFIELDS; i++)
++		if (fake_mask & (1U << i))
++			memcpy(field_ptr(&init_uts_ns.name, i),
++			       field_ptr(&fake_vals, i),
++			       __NEW_UTS_LEN + 1);
++}
++
++static int fake_parse_line(char *line, int *en, struct new_utsname *vals,
++			   unsigned int *mask)
++{
++	char *eq, *key, *val;
++	size_t vlen;
++	int i;
++
++	if (!*line)
++		return 0;
++
++	eq = strchr(line, '=');
++	if (!eq)
++		return -EINVAL;
++	*eq = '\0';
++	key = line;
++	val = eq + 1;
++
++	vlen = strlen(val);
++	if (vlen && val[vlen - 1] == '\r')
++		val[--vlen] = '\0';
++
++	if (!strcmp(key, "enable")) {
++		if (!strcmp(val, "1")) {
++			*en = 1;
++			return 0;
++		}
++		if (!strcmp(val, "0")) {
++			*en = 0;
++			return 0;
++		}
++		return -EINVAL;
++	}
++
++	for (i = 0; i < FAKE_NFIELDS; i++) {
++		if (strcmp(key, fake_keys[i]))
++			continue;
++		if (vlen > __NEW_UTS_LEN)
++			return -EINVAL;
++		strscpy(field_ptr(vals, i), val, __NEW_UTS_LEN + 1);
++		*mask |= 1U << i;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
++static ssize_t fakeuname_write(struct file *file, const char __user *buf,
++			       size_t count, loff_t *ppos)
++{
++	char kbuf[FAKE_BUF_MAX + 1], *line, *nl;
++	struct new_utsname vals;
++	unsigned int mask;
++	int en = -1, err;
++	bool was_enabled;
++
++	if (count > FAKE_BUF_MAX)
++		return -E2BIG;
++	if (copy_from_user(kbuf, buf, count))
++		return -EFAULT;
++	kbuf[count] = '\0';
++
++	down_write(&uts_sem);
++
++	/* Stage on top of the stored configuration; commit only if all
++	 * lines parse, so a bad write changes nothing.
++	 */
++	vals = fake_vals;
++	mask = fake_mask;
++
++	line = kbuf;
++	for (;;) {
++		nl = strchr(line, '\n');
++		if (nl)
++			*nl = '\0';
++		err = fake_parse_line(line, &en, &vals, &mask);
++		if (err)
++			goto out;
++		if (!nl)
++			break;
++		line = nl + 1;
++	}
++
++	was_enabled = fake_enabled;
++
++	if (en == 1 && !was_enabled) {
++		fake_orig = init_uts_ns.name;
++		fake_enabled = true;
++	}
++	if (en == 0 && was_enabled) {
++		init_uts_ns.name = fake_orig;
++		fake_enabled = false;
++	}
++
++	fake_vals = vals;
++	fake_mask = mask;
++
++	if (fake_enabled)
++		fake_apply_locked();
++
++	err = count;
++out:
++	up_write(&uts_sem);
++	return err;
++}
++
++static ssize_t fakeuname_read(struct file *file, char __user *buf,
++			      size_t count, loff_t *ppos)
++{
++	char out[16 + FAKE_NFIELDS * (__NEW_UTS_LEN + 32)];
++	int len = 0, i;
++
++	down_read(&uts_sem);
++	len += scnprintf(out + len, sizeof(out) - len, "enable=%d\n",
++			 fake_enabled ? 1 : 0);
++	for (i = 0; i < FAKE_NFIELDS; i++)
++		len += scnprintf(out + len, sizeof(out) - len, "%s=%s\n",
++				 fake_keys[i],
++				 field_ptr(&init_uts_ns.name, i));
++	up_read(&uts_sem);
++
++	return simple_read_from_buffer(buf, count, ppos, out, len);
++}
++
++static const struct file_operations fakeuname_fops = {
++	.owner		= THIS_MODULE,
++	.open		= nonseekable_open,
++	.read		= fakeuname_read,
++	.write		= fakeuname_write,
++	.llseek		= no_llseek,
++};
++
++static struct miscdevice fakeuname_misc = {
++	.minor		= MISC_DYNAMIC_MINOR,
++	.name		= "fakeuname",
++	.fops		= &fakeuname_fops,
++	.mode		= 0644,
++};
++
++static int __init fakeuname_init(void)
++{
++	return misc_register(&fakeuname_misc);
++}
++module_init(fakeuname_init);
++
++MODULE_DESCRIPTION("Configurable fake utsname interface");
++MODULE_LICENSE("GPL");
+diff --git a/kernel/sys.c b/kernel/sys.c
+index 0e7609307..9437283fb 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -1270,12 +1270,21 @@ static int override_release(char __user *release, size_t len)
+ 	int ret = 0;
+ 
+ 	if (current->personality & UNAME26) {
+-		const char *rest = UTS_RELEASE;
++		char relbuf[__NEW_UTS_LEN + 1];
++		const char *rest;
+ 		char buf[65] = { 0 };
+ 		int ndots = 0;
+ 		unsigned v;
+ 		size_t copy;
+ 
++		/* Use the runtime release so a faked uname stays
++		 * consistent for UNAME26 processes too.
++		 */
++		down_read(&uts_sem);
++		strscpy(relbuf, utsname()->release, sizeof(relbuf));
++		up_read(&uts_sem);
++		rest = relbuf;
++
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+ 				break;
+diff --git a/net/ethtool/ioctl.c b/net/ethtool/ioctl.c
+index fd26baf6e..e47e5db60 100644
+--- a/net/ethtool/ioctl.c
++++ b/net/ethtool/ioctl.c
+@@ -30,6 +30,7 @@
+ #include <net/flow_offload.h>
+ #include <linux/ethtool_netlink.h>
+ #include <generated/utsrelease.h>
++#include <linux/utsname.h>
+ #include "common.h"
+ 
+ /*
+@@ -708,7 +709,7 @@ static noinline_for_stack int ethtool_get_drvinfo(struct net_device *dev,
+ 
+ 	memset(&info, 0, sizeof(info));
+ 	info.cmd = ETHTOOL_GDRVINFO;
+-	strlcpy(info.version, UTS_RELEASE, sizeof(info.version));
++	strlcpy(info.version, init_utsname()->release, sizeof(info.version));
+ 	if (ops->get_drvinfo) {
+ 		ops->get_drvinfo(dev, &info);
+ 	} else if (dev->dev.parent && dev->dev.parent->driver) {
