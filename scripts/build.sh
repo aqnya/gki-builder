@@ -285,6 +285,49 @@ verify_config() {
   fi
 }
 
+# ------------------------------------------------- 4.5 ABI 布局护栏（第二类变砖）
+# check_kmi 只看「符号还在不在」。但厂商模块是拿 gki_defconfig（一批看着像调试的项
+# 全是 =y）的头文件编译的，struct 里的字段偏移已经被烤进 .ko。关掉这些 CONFIG 会
+# 删掉结构体成员 → 后面所有字段偏移前移 → 模块读野指针 → 卡 logo 且无 panic、无日志，
+# 而符号一个没少，所以 KMI 护栏会全绿放行（2026-09-23 第三次卡 logo 就是这么来的）。
+# 这一步在**编译之前**跑（省 30 分钟），要求名单里的项与 gki_defconfig 取值一致。
+check_abi_pinned() {
+  local list="$ROOT/scripts/abi-pinned-configs.txt"
+  local defconfig="$KERNEL_SRC/arch/$ARCH/configs/$DEFCONFIG"
+  [[ -f "$list" ]] || die "找不到 ABI 布局名单 $list"
+  [[ -f "$defconfig" ]] || die "找不到 defconfig $defconfig"
+  [[ -s "$CONFIG_LIST" ]] || { summary_lines+=("| ABI 布局护栏 | ✅ config.yml 未改任何开关 |"); return 0; }
+
+  info "ABI 布局护栏：检查有没有动到模块可见结构体里的 CONFIG"
+  local sym _rest want base checked=0
+  local -a bad=()
+  while read -r sym _rest; do
+    [[ -z "$sym" || "$sym" == \#* ]] && continue
+    # config.yml 没提这一项 -> 没动它，安全
+    want="$(awk -F'\t' -v s="$sym" '$1 == s { print $2 }' "$CONFIG_LIST")"
+    [[ -n "$want" ]] || continue
+    base="$(bash "$KERNEL_SRC/scripts/config" --file "$defconfig" --state "$sym" 2>/dev/null || echo undef)"
+    checked=$((checked + 1))
+    [[ "$want" == "$base" ]] || bad+=("$sym：gki_defconfig=$base，config.yml=$want")
+  done < "$list"
+
+  if (( ${#bad[@]} > 0 )); then
+    {
+      echo "::error::config.yml 改了 ABI 布局红线名单里的开关，刷进去会卡 logo："
+      printf '  - %s\n' "${bad[@]}"
+      echo
+      echo "原因：这些 CONFIG 出现在 include/ 里模块可见结构体（task_struct 等）的定义内部，"
+      echo "      关掉会删掉结构体成员、把后面所有字段的偏移整体前移，"
+      echo "      而厂商模块的偏移是编译期烤进 .ko 的 —— 符号一个不少，但读出来的是野指针。"
+      echo "      名单与判定方法见 scripts/abi-pinned-configs.txt。"
+    } >&2
+    exit 1
+  fi
+
+  note "ABI 布局护栏：config.yml 动了 $checked 项，全部不在红线名单内"
+  summary_lines+=("| ABI 布局护栏 | ✅ 未触碰模块可见结构体的布局（名单 $checked 项已核对） |")
+}
+
 # ------------------------------------------------------------ 5. 编译
 build_image() {
   info "编译 Image（$(nproc) 线程）"
@@ -376,6 +419,7 @@ main() {
   apply_patches
   generate_config
   verify_config
+  check_abi_pinned
   build_image
   check_kmi
   package

@@ -1,0 +1,69 @@
+# ABI 布局红线名单 —— 「只是调试开关」但不能关的那些
+#
+# 为什么需要这份名单：check_kmi（scripts/kmi-required-symbols.txt）只校验**符号**
+# 还在不在。但厂商模块是拿 gki_defconfig（下面这些项全是 =y）的头文件编译的，
+# struct 里的字段偏移早就被烤进了 .ko 二进制。关掉这些 CONFIG 会**删掉结构体成员**
+# → 后面所有字段偏移整体前移 → 模块通过野指针读内存 → 早期崩溃/卡 logo，
+# 而且不是 panic，抓不到崩溃日志。符号一个没少，所以 check_kmi 全绿放行。
+#
+# 实测（2026-09-23，第三次卡 logo）：关掉 SCHEDSTATS + TASK_XACCT + PAGE_OWNER
+# 后编译一切正常、KMI 护栏 0 缺失，刷进去卡 logo。原因就是
+#   SCHEDSTATS=n  → struct sched_statistics 变空结构，sched_entity 之后全体前移 ~232 字节
+#   TASK_XACCT=n  → task_struct 少 3 个 u64，前移 24 字节
+#   PAGE_OWNER=n  → task_struct 少 in_page_owner:1 位域，挪动同存储单元里的后续位域
+#
+# 判定方法（不靠猜）：grep -rn 'CONFIG_<该项>' include/ —— 只要它出现在
+# include/ 里某个 struct 的定义内部，就属于这一类，不能动。
+#
+# 格式：CONFIG_XXX  后面是说明（本文件由 build.sh 的 check_abi_pinned 解析，
+# 第一列是符号名，其余忽略）。规则：**必须与 gki_defconfig 的取值一致**。
+
+# ---- 调度/task_struct 布局 ----
+CONFIG_SCHEDSTATS            关掉会把 struct sched_statistics 清空 → task_struct 前移约 232 字节
+CONFIG_TASK_XACCT            关掉 task_struct 少 3 个 u64 → 前移 24 字节
+CONFIG_TASK_DELAY_ACCT       task_struct 里的 delayacct 相关字段
+CONFIG_SCHED_INFO            被 SCHEDSTATS select，task_struct 里的 struct sched_info
+CONFIG_PSI                   task_struct 里的 psi_flags / in_memstall
+CONFIG_TASK_IO_ACCOUNTING    task_struct 里的 ioac
+CONFIG_LATENCYTOP            task_struct 里的 latency_record
+CONFIG_FAULT_INJECTION       task_struct 里 make_it_fail
+CONFIG_KEYS / CONFIG_SYSVIPC / CONFIG_AUDIT / CONFIG_IO_URING / CONFIG_RSEQ
+                            task_struct 里各自的条件字段（本项目里 SYSVIPC 是显式 =y 的）
+
+# ---- 内存跟踪类（同时改 task_struct / page_ext）----
+CONFIG_PAGE_OWNER            task_struct 的 in_page_owner:1 位域 + page_ext 布局
+CONFIG_PAGE_PINNER           page_ext 布局（收益本就≈0，boot param 不开就不启用）
+
+# ---- KASAN 家族：既删符号（kasan_flag_enabled）又改布局 ----
+CONFIG_KASAN                 KASAN_GENERIC/SW_TAGS 在 task_struct 里有字段（前两次变砖的元凶）
+CONFIG_KASAN_GENERIC
+CONFIG_KASAN_SW_TAGS
+CONFIG_KASAN_HW_TAGS         =n 会让 mm/kasan/hw_tags.c 的 kasan_flag_enabled 消失（15 个模块要）
+
+# ---- 调试/统计类：删符号（check_kmi 覆盖，这里再兜一道）----
+CONFIG_FUNCTION_ERROR_INJECTION  在 include/linux/module.h 的 struct module 里加了 ei_funcs/num_ei_funcs
+CONFIG_DEBUG_LIST            删 __list_add_valid / __list_del_entry_valid
+CONFIG_SOFTLOCKUP_DETECTOR   删 touch_softlockup_watchdog
+CONFIG_CFI_CLANG             删 __ubsan_handle_cfi_check_fail_abort（293 个模块全要）
+CONFIG_DEBUG_SPINLOCK        spinlock 结构体加字段
+CONFIG_DEBUG_MUTEXES         mutex 结构体加字段
+CONFIG_PROVE_LOCKING         lockdep 给一堆结构体加字段（ABI 杀手）
+CONFIG_LOCKDEP
+CONFIG_DEBUG_OBJECTS
+CONFIG_UBSAN                 在 task_struct 里（UBSAN && !UBSAN_TRAP）有字段
+CONFIG_KCSAN                 task_struct 里有字段
+CONFIG_KCOV                  task_struct 里有字段
+CONFIG_TRACING               task_struct 里有 trace 字段
+CONFIG_FUNCTION_GRAPH_TRACER task_struct 里有字段
+CONFIG_BLK_DEV_IO_TRACE      task_struct 里有 io_context 统计字段
+CONFIG_DETECT_HUNG_TASK      task_struct 里有 hung_task 相关字段
+CONFIG_MEMCG                 task_struct / mm_struct 里一大堆字段
+CONFIG_CGROUPS / CONFIG_CPUSETS / CONFIG_BLK_CGROUP / CONFIG_CGROUP_SCHED
+                            task_struct 里各自的条件字段
+CONFIG_LRU_GEN               task_struct 里有 lru_gen 字段（注意：LRU_GEN_ENABLED 只是运行开关，安全）
+CONFIG_RT_MUTEXES / CONFIG_PREEMPT_NOTIFIERS / CONFIG_PERF_EVENTS 等
+                            task_struct 里各自的条件字段
+
+# ---- preempt 模型：删符号（check_kmi 覆盖）----
+# 改 PREEMPT_NONE / PREEMPT / 去掉 PREEMPT_COUNT 会删
+# preempt_schedule / preempt_schedule_notrace —— 严禁改。

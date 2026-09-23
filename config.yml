@@ -48,33 +48,53 @@ config:
   CONFIG_LOCALVERSION: "-android13-8"
   CONFIG_NTSYNC: y
 
-  # ---- 省电批次 1 ----
-  # 每一项都对照过设备上 293 个厂商模块、2329 个「内核必须导出」的符号：0 引用。
-  # 构建时 scripts/build.sh 的 KMI 护栏会再校验一遍（删到不该删的符号直接 FAIL）。
-  #
+  # ==================================================================
+  # ⚠️ 教训（2026-09-23 实测，卡 logo 第三次）：**符号护栏全绿照样不开机**。
+  # 原因不是缺符号，而是【结构体布局】变了：厂商模块是拿 gki_defconfig
+  # （这些项全是 =y）的头文件编的，struct task_struct 之类里的字段偏移
+  # 已经被烤进 .ko 二进制。偏移一错，模块读到的就是野指针，早期就崩，
+  # 还没到能打日志的地方 —— 所以「不是 panic、抓不到 crashlog」。
+  # 规则：凡是出现在【模块可见头文件的结构体定义里】的 #ifdef CONFIG_*，
+  #       一律不能动（符号名单查不出来，KASAN 那次也是同一个坑）。
+  # ==================================================================
+
+  # ---- 可以关：逐项确认过不改任何模块可见结构体的布局 ----
   # 每次分配都 memset 清零 —— 关掉省全系统的内存带宽/CPU。
+  # 只动 include/linux/mm.h 里的 static key（DECLARE_STATIC_KEY_MAYBE），无布局影响。
   # （代价：未初始化内存泄露的硬化没了，这是 Android 的默认防泄露项，介意就删掉这行）
   CONFIG_INIT_ON_ALLOC_DEFAULT_ON: n
-  # 调度统计记账：设备上 sched_schedstats=1，确实在每次调度时记账
-  CONFIG_SCHEDSTATS: n
-  # KFENCE 抽样：设备上 sample_interval=500，确实在跑（STATIC_KEYS 下开销不大）
+  # KFENCE 抽样：设备上 sample_interval=500 确实在跑。只出现在 include/linux/kfence.h，
+  # 全是宏与函数声明，不碰 struct page 等模块可见结构体。
   CONFIG_KFENCE: n
-
-  # ---- 省电批次 2：纯「统计/调试」开销，关掉不影响功能、也不掉任何符号 ----
-  # 同样逐项对照过那 2329 个符号：全部 0 引用。
-  # 每次中断都读 sched_clock 做 irq 时间记账（代价：/proc/stat 的 irq 字段精度下降）
+  # 每次中断都读 sched_clock 做 irq 时间记账（代价：/proc/stat 的 irq 字段精度下降）。
+  # CONFIG_IRQ_TIME_ACCOUNTING 在 include/ 里只有 vtime.h / sched/clock.h 的
+  # 静态内联与函数声明；struct irqtime 属于 kernel/sched/sched.h 的 struct rq，内核内部。
   CONFIG_IRQ_TIME_ACCOUNTING: n
-  # 每 tick 给任务记 RSS/VM 扩展账（taskstats netlink API 本身保留）
-  CONFIG_TASK_XACCT: n
-  # /sys/kernel/kheaders.tar.xz，白占内存
+  # /sys/kernel/kheaders.tar.xz，白占内存。include/ 里完全没有它。
   CONFIG_IKHEADERS: n
-  # 页归属 / 页钉住跟踪（默认就没开，纯占内存与代码）
-  CONFIG_PAGE_OWNER: n
-  CONFIG_PAGE_PINNER: n
-  # trace 直方图触发器、内核函数错误注入、workqueue 看门狗（每 30s 扫一遍）
+  # trace 直方图触发器。include/ 里完全没有它。
   CONFIG_HIST_TRIGGERS: n
-  CONFIG_FUNCTION_ERROR_INJECTION: n
+  # workqueue 看门狗（每 30s 扫一遍）。include/linux/workqueue.h 里只有函数声明。
   CONFIG_WQ_WATCHDOG: n
+
+  # ---- 🚫 不能关：会改 struct task_struct / struct module 的布局（关了就卡 logo）----
+  # 调度统计记账。CONFIG_SCHEDSTATS=n 会把 struct sched_statistics 里 29 个 u64 全部
+  # #ifdef 掉，而 struct sched_entity 里那个字段是无条件保留的 → sched_entity 之后的
+  # 【每一个字段】偏移前移约 232 字节。附带 CONFIG_SCHED_INFO 也被它 select 掉。
+  CONFIG_SCHEDSTATS: y
+  # 每 tick 给任务记 RSS/VM 扩展账（taskstats netlink API 不受影响）。
+  # 关掉会让 task_struct 少 acct_rss_mem1/acct_vm_mem1/acct_timexpd 三个 u64 → 前移 24 字节。
+  CONFIG_TASK_XACCT: y
+  # 页归属跟踪（运行时要 page_owner=on 才真正启用，平时≈0 开销，收益本来就是假的）。
+  # 关掉会让 task_struct 少 in_page_owner:1 这个位域 —— 位域共享存储单元，
+  # 摘掉一个会挪动同单元里后续位域的位置，甚至塌掉 4 字节。
+  CONFIG_PAGE_OWNER: y
+  # 页钉住跟踪（同样要 boot param 才启用，收益≈0）。走 page_ext（内核内部数组），
+  # 收益为 0 而风险不为 0，干脆留着。
+  CONFIG_PAGE_PINNER: y
+  # 内核函数错误注入（debugfs 才用得上）。它在 include/linux/module.h 的
+  # struct module 里加了 ei_funcs/num_ei_funcs 两个成员。
+  CONFIG_FUNCTION_ERROR_INJECTION: y
 
   # ---- 网络：启用 BBR 拥塞控制 ----
   # 现状：gki_defconfig 没开 TCP_CONG_ADVANCED，设备上
