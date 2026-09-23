@@ -70,7 +70,6 @@ config:
   CONFIG_NET_SCH_DEFAULT: y
   CONFIG_NET_SCH_FQ: y
   CONFIG_DEFAULT_FQ: y
-  CONFIG_CRASHLOG: y
 
   # ---- 省电批次 3：RCU 惰性回调 —— ❌ 实测不开机（卡第一屏），永久停用 ----
   # 把 CONFIG_RCU_LAZY_DEFAULT_OFF 从 y 翻成 n（= 让 enable_rcu_lazy 默认 true）后，
