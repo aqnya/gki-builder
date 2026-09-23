@@ -86,7 +86,7 @@ index 3d1b5810c..a89d49040 100644
  	P(sysctl_sched_features);
  #undef PN
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
-index 32597673f..8859170ad 100644
+index 32597673f..77db7b448 100644
 --- a/kernel/sched/fair.c
 +++ b/kernel/sched/fair.c
 @@ -20,6 +20,8 @@
@@ -98,7 +98,7 @@ index 32597673f..8859170ad 100644
  #include "sched.h"
  
  #include <trace/hooks/sched.h>
-@@ -27,21 +29,12 @@
+@@ -27,21 +29,19 @@
  EXPORT_TRACEPOINT_SYMBOL_GPL(sched_stat_runtime);
  
  /*
@@ -111,20 +111,26 @@ index 32597673f..8859170ad 100644
 - *
 - * (to see the precise effective timeslice length of your workload,
 - *  run vmstat and monitor the context-switches (cs) field)
-+ * Minimal preemption granularity for CPU-bound tasks:
-  *
+- *
 - * (default: 6ms * (1 + ilog(ncpus)), units: nanoseconds)
-+ * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
++ * Kept for ABI compatibility only: the GKI module sched-walt.ko imports this
++ * exported symbol.  EEVDF uses sysctl_sched_base_slice instead.
   */
--unsigned int sysctl_sched_latency			= 6000000ULL;
--EXPORT_SYMBOL_GPL(sysctl_sched_latency);
+ unsigned int sysctl_sched_latency			= 6000000ULL;
+ EXPORT_SYMBOL_GPL(sysctl_sched_latency);
 -static unsigned int normalized_sysctl_sched_latency	= 6000000ULL;
++
++/*
++ * Minimal preemption granularity for CPU-bound tasks:
++ *
++ * (default: 0.75 msec * (1 + ilog(ncpus)), units: nanoseconds)
++ */
 +unsigned int sysctl_sched_base_slice			= 750000ULL;
 +static unsigned int normalized_sysctl_sched_base_slice	= 750000ULL;
  
  /*
   * The initial- and re-scaling of tunables is configurable
-@@ -56,37 +49,12 @@ static unsigned int normalized_sysctl_sched_latency	= 6000000ULL;
+@@ -56,37 +56,12 @@ static unsigned int normalized_sysctl_sched_latency	= 6000000ULL;
   */
  unsigned int sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_LOG;
  
@@ -162,7 +168,7 @@ index 32597673f..8859170ad 100644
  const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
  
  int sched_thermal_decay_shift;
-@@ -195,9 +163,7 @@ static void update_sysctl(void)
+@@ -195,9 +170,7 @@ static void update_sysctl(void)
  
  #define SET_SYSCTL(name) \
  	(sysctl_##name = (factor) * normalized_sysctl_##name)
@@ -173,7 +179,7 @@ index 32597673f..8859170ad 100644
  #undef SET_SYSCTL
  }
  
-@@ -532,19 +498,214 @@ static inline u64 min_vruntime(u64 min_vruntime, u64 vruntime)
+@@ -532,19 +505,214 @@ static inline u64 min_vruntime(u64 min_vruntime, u64 vruntime)
  	return min_vruntime;
  }
  
@@ -391,7 +397,7 @@ index 32597673f..8859170ad 100644
  
  	u64 vruntime = cfs_rq->min_vruntime;
  
-@@ -555,9 +716,7 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
+@@ -555,9 +723,7 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
  			curr = NULL;
  	}
  
@@ -402,7 +408,7 @@ index 32597673f..8859170ad 100644
  		if (!curr)
  			vruntime = se->vruntime;
  		else
-@@ -565,7 +724,7 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
+@@ -565,7 +731,7 @@ static void update_min_vruntime(struct cfs_rq *cfs_rq)
  	}
  
  	/* ensure we never gain time by being placed backwards. */
@@ -411,7 +417,7 @@ index 32597673f..8859170ad 100644
  #ifndef CONFIG_64BIT
  	smp_wmb();
  	cfs_rq->min_vruntime_copy = cfs_rq->min_vruntime;
-@@ -577,19 +736,53 @@ static inline bool __entity_less(struct rb_node *a, const struct rb_node *b)
+@@ -577,19 +743,53 @@ static inline bool __entity_less(struct rb_node *a, const struct rb_node *b)
  	return entity_before(__node_2_se(a), __node_2_se(b));
  }
  
@@ -467,7 +473,7 @@ index 32597673f..8859170ad 100644
  }
  
  struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
-@@ -602,14 +795,132 @@ struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
+@@ -602,14 +802,132 @@ struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
  	return __node_2_se(left);
  }
  
@@ -509,13 +515,12 @@ index 32597673f..8859170ad 100644
 +	 * Once selected, run a task until it either becomes non-eligible or
 +	 * until it gets a new slice. See the HACK in set_next_entity().
 +	 */
-+	if (sched_feat(RUN_TO_PARITY) && curr && curr->vlag == curr->deadline)
++	if (curr && curr->vlag == curr->deadline)
 +		return curr;
 +
 +	while (node) {
 +		struct sched_entity *se = __node_2_se(node);
- 
--	return __node_2_se(next);
++
 +		/*
 +		 * If this entity is not eligible, try the left subtree.
 +		 */
@@ -536,7 +541,8 @@ index 32597673f..8859170ad 100644
 +		 */
 +		if (node->rb_left) {
 +			struct sched_entity *left = __node_2_se(node->rb_left);
-+
+ 
+-	return __node_2_se(next);
 +			if (!best_left || deadline_gt(min_deadline, best_left, left))
 +				best_left = left;
 +
@@ -605,7 +611,7 @@ index 32597673f..8859170ad 100644
  }
  
  #ifdef CONFIG_SCHED_DEBUG
-@@ -631,14 +942,9 @@ int sched_update_scaling(void)
+@@ -631,14 +949,9 @@ int sched_update_scaling(void)
  {
  	unsigned int factor = get_update_sysctl_factor();
  
@@ -621,7 +627,7 @@ index 32597673f..8859170ad 100644
  #undef WRT_SYSCTL
  
  	return 0;
-@@ -656,68 +962,36 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
+@@ -656,68 +969,36 @@ static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
  	return delta;
  }
  
@@ -712,7 +718,7 @@ index 32597673f..8859170ad 100644
  }
  
  #include "pelt.h"
-@@ -853,6 +1127,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
+@@ -853,6 +1134,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
  	schedstat_add(cfs_rq->exec_clock, delta_exec);
  
  	curr->vruntime += calc_delta_fair(delta_exec, curr);
@@ -720,7 +726,7 @@ index 32597673f..8859170ad 100644
  	update_min_vruntime(cfs_rq);
  
  	if (entity_is_task(curr)) {
-@@ -3082,10 +3357,14 @@ dequeue_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se) { }
+@@ -3082,10 +3364,14 @@ dequeue_load_avg(struct cfs_rq *cfs_rq, struct sched_entity *se) { }
  static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
  			    unsigned long weight)
  {
@@ -735,7 +741,7 @@ index 32597673f..8859170ad 100644
  		update_load_sub(&cfs_rq->load, se->load.weight);
  	}
  	dequeue_load_avg(cfs_rq, se);
-@@ -3093,6 +3372,25 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
+@@ -3093,6 +3379,25 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
  	update_load_set(&se->load, weight);
  
  	trace_android_vh_reweight_entity(se);
@@ -761,7 +767,7 @@ index 32597673f..8859170ad 100644
  #ifdef CONFIG_SMP
  	do {
  		u32 divider = get_pelt_divider(&se->avg);
-@@ -3102,9 +3400,11 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
+@@ -3102,9 +3407,11 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
  #endif
  
  	enqueue_load_avg(cfs_rq, se);
@@ -775,7 +781,7 @@ index 32597673f..8859170ad 100644
  }
  
  void reweight_task(struct task_struct *p, int prio)
-@@ -4310,94 +4610,108 @@ static inline void update_misfit_status(struct task_struct *p, struct rq *rq) {}
+@@ -4310,94 +4617,108 @@ static inline void update_misfit_status(struct task_struct *p, struct rq *rq) {}
  
  #endif /* CONFIG_SMP */
  
@@ -803,11 +809,11 @@ index 32597673f..8859170ad 100644
  
 -	if (se->exec_start == 0)
 -		return false;
--
--	cfs_rq = cfs_rq_of(se);
 +	se->slice = sysctl_sched_base_slice;
 +	vslice = calc_delta_fair(se->slice, se);
  
+-	cfs_rq = cfs_rq_of(se);
+-
 -	sleep_time = rq_clock_task(rq_of(cfs_rq));
 +	/*
 +	 * Due to how V is constructed as the weighted average of entities,
@@ -817,7 +823,7 @@ index 32597673f..8859170ad 100644
 +	 *
 +	 * EEVDF: placement strategy #1 / #2
 +	 */
-+	if (sched_feat(PLACE_LAG) && cfs_rq->nr_running) {
++	if (cfs_rq->nr_running) {
 +		struct sched_entity *curr = cfs_rq->curr;
 +		unsigned long load;
  
@@ -910,7 +916,7 @@ index 32597673f..8859170ad 100644
  	 */
 -	if (initial && sched_feat(START_DEBIT))
 -		vruntime += sched_vslice(cfs_rq, se);
-+	if (sched_feat(PLACE_DEADLINE_INITIAL) && (flags & ENQUEUE_INITIAL))
++	if (flags & ENQUEUE_INITIAL)
 +		vslice /= 2;
  
 -	/* sleeps up to a single latency don't count. */
@@ -960,7 +966,7 @@ index 32597673f..8859170ad 100644
  }
  
  static void check_enqueue_throttle(struct cfs_rq *cfs_rq);
-@@ -4457,27 +4771,17 @@ static inline bool cfs_bandwidth_used(void);
+@@ -4457,27 +4778,17 @@ static inline bool cfs_bandwidth_used(void);
  static void
  enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  {
@@ -990,7 +996,7 @@ index 32597673f..8859170ad 100644
  	/*
  	 * When enqueuing a sched_entity, we must:
  	 *   - Update loads to have both entity and cfs_rq synced with now.
-@@ -4489,17 +4793,22 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -4489,17 +4800,22 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  	update_load_avg(cfs_rq, se, UPDATE_TG | DO_ATTACH);
  	se_update_runnable(se);
  	update_cfs_group(se);
@@ -1016,7 +1022,7 @@ index 32597673f..8859170ad 100644
  	if (!curr)
  		__enqueue_entity(cfs_rq, se);
  	se->on_rq = 1;
-@@ -4516,17 +4825,6 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -4516,17 +4832,6 @@ enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  		check_enqueue_throttle(cfs_rq);
  }
  
@@ -1034,7 +1040,7 @@ index 32597673f..8859170ad 100644
  static void __clear_buddies_next(struct sched_entity *se)
  {
  	for_each_sched_entity(se) {
-@@ -4538,27 +4836,10 @@ static void __clear_buddies_next(struct sched_entity *se)
+@@ -4538,27 +4843,10 @@ static void __clear_buddies_next(struct sched_entity *se)
  	}
  }
  
@@ -1062,7 +1068,7 @@ index 32597673f..8859170ad 100644
  }
  
  static __always_inline void return_cfs_rq_runtime(struct cfs_rq *cfs_rq);
-@@ -4586,20 +4867,12 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -4586,20 +4874,12 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  
  	clear_buddies(cfs_rq, se);
  
@@ -1084,7 +1090,7 @@ index 32597673f..8859170ad 100644
  	/* return excess runtime on last dequeue */
  	return_cfs_rq_runtime(cfs_rq);
  
-@@ -4615,51 +4888,6 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
+@@ -4615,51 +4895,6 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
  		update_min_vruntime(cfs_rq);
  }
  
@@ -1136,7 +1142,7 @@ index 32597673f..8859170ad 100644
  void set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
  {
  	clear_buddies(cfs_rq, se);
-@@ -4674,6 +4902,11 @@ void set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
+@@ -4674,6 +4909,11 @@ void set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
  		update_stats_wait_end(cfs_rq, se);
  		__dequeue_entity(cfs_rq, se);
  		update_load_avg(cfs_rq, se, UPDATE_TG);
@@ -1148,7 +1154,7 @@ index 32597673f..8859170ad 100644
  	}
  
  	update_stats_curr_start(cfs_rq, se);
-@@ -4695,68 +4928,28 @@ void set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
+@@ -4695,68 +4935,28 @@ void set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
  }
  EXPORT_SYMBOL_GPL(set_next_entity);
  
@@ -1189,10 +1195,7 @@ index 32597673f..8859170ad 100644
  	 */
 -	if (cfs_rq->skip && cfs_rq->skip == se) {
 -		struct sched_entity *second;
-+	if (sched_feat(NEXT_BUDDY) &&
-+	    cfs_rq->next && entity_eligible(cfs_rq, cfs_rq->next))
-+		return cfs_rq->next;
- 
+-
 -		if (se == curr) {
 -			second = __pick_first_entity(cfs_rq);
 -		} else {
@@ -1200,7 +1203,10 @@ index 32597673f..8859170ad 100644
 -			if (!second || (curr && entity_before(curr, second)))
 -				second = curr;
 -		}
--
++	if (sched_feat(NEXT_BUDDY) &&
++	    cfs_rq->next && entity_eligible(cfs_rq, cfs_rq->next))
++		return cfs_rq->next;
+ 
 -		if (second && wakeup_preempt_entity(second, left) < 1)
 -			se = second;
 -	}
@@ -1223,7 +1229,7 @@ index 32597673f..8859170ad 100644
  }
  
  static bool check_cfs_rq_runtime(struct cfs_rq *cfs_rq);
-@@ -4773,8 +4966,6 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
+@@ -4773,8 +4973,6 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
  	/* throttle cfs_rqs exceeding runtime */
  	check_cfs_rq_runtime(cfs_rq);
  
@@ -1232,7 +1238,7 @@ index 32597673f..8859170ad 100644
  	if (prev->on_rq) {
  		update_stats_wait_start(cfs_rq, prev);
  		/* Put 'current' back into the tree. */
-@@ -4816,8 +5007,6 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
+@@ -4816,8 +5014,6 @@ entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int queued)
  		return;
  #endif
  
@@ -1241,7 +1247,7 @@ index 32597673f..8859170ad 100644
  	trace_android_rvh_entity_tick(cfs_rq, curr);
  }
  
-@@ -5698,13 +5887,12 @@ static inline void unthrottle_offline_cfs_rqs(struct rq *rq) {}
+@@ -5698,13 +5894,12 @@ static inline void unthrottle_offline_cfs_rqs(struct rq *rq) {}
  static void hrtick_start_fair(struct rq *rq, struct task_struct *p)
  {
  	struct sched_entity *se = &p->se;
@@ -1256,7 +1262,7 @@ index 32597673f..8859170ad 100644
  		s64 delta = slice - ran;
  
  		if (delta < 0) {
-@@ -5728,8 +5916,7 @@ static void hrtick_update(struct rq *rq)
+@@ -5728,8 +5923,7 @@ static void hrtick_update(struct rq *rq)
  	if (!hrtick_enabled_fair(rq) || curr->sched_class != &fair_sched_class)
  		return;
  
@@ -1266,7 +1272,7 @@ index 32597673f..8859170ad 100644
  }
  #else /* !CONFIG_SCHED_HRTICK */
  static inline void
-@@ -7290,32 +7477,6 @@ static void detach_entity_cfs_rq(struct sched_entity *se);
+@@ -7290,32 +7484,6 @@ static void detach_entity_cfs_rq(struct sched_entity *se);
   */
  static void migrate_task_rq_fair(struct task_struct *p, int new_cpu)
  {
@@ -1299,7 +1305,7 @@ index 32597673f..8859170ad 100644
  	if (p->on_rq == TASK_ON_RQ_MIGRATING) {
  		/*
  		 * In case of TASK_ON_RQ_MIGRATING we in fact hold the 'old'
-@@ -7358,66 +7519,6 @@ balance_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+@@ -7358,66 +7526,6 @@ balance_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
  }
  #endif /* CONFIG_SMP */
  
@@ -1366,7 +1372,7 @@ index 32597673f..8859170ad 100644
  static void set_next_buddy(struct sched_entity *se)
  {
  	for_each_sched_entity(se) {
-@@ -7429,12 +7530,6 @@ static void set_next_buddy(struct sched_entity *se)
+@@ -7429,12 +7537,6 @@ static void set_next_buddy(struct sched_entity *se)
  	}
  }
  
@@ -1379,7 +1385,7 @@ index 32597673f..8859170ad 100644
  /*
   * Preempt the current task with a newly woken task if needed:
   */
-@@ -7443,7 +7538,6 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
+@@ -7443,7 +7545,6 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
  	struct task_struct *curr = rq->curr;
  	struct sched_entity *se = &curr->se, *pse = &p->se;
  	struct cfs_rq *cfs_rq = task_cfs_rq(curr);
@@ -1387,7 +1393,7 @@ index 32597673f..8859170ad 100644
  	int next_buddy_marked = 0;
  	int cse_is_idle, pse_is_idle;
  	bool ignore = false;
-@@ -7464,7 +7558,7 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
+@@ -7464,7 +7565,7 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
  	if (unlikely(throttled_hierarchy(cfs_rq_of(pse))))
  		return;
  
@@ -1396,7 +1402,7 @@ index 32597673f..8859170ad 100644
  		set_next_buddy(pse);
  		next_buddy_marked = 1;
  	}
-@@ -7509,42 +7603,25 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
+@@ -7509,42 +7610,25 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
  	if (cse_is_idle != pse_is_idle)
  		return;
  
@@ -1446,7 +1452,7 @@ index 32597673f..8859170ad 100644
  }
  
  #ifdef CONFIG_SMP
-@@ -7753,8 +7830,6 @@ static void put_prev_task_fair(struct rq *rq, struct task_struct *prev)
+@@ -7753,8 +7837,6 @@ static void put_prev_task_fair(struct rq *rq, struct task_struct *prev)
  
  /*
   * sched_yield() is very simple
@@ -1455,7 +1461,7 @@ index 32597673f..8859170ad 100644
   */
  static void yield_task_fair(struct rq *rq)
  {
-@@ -7770,21 +7845,19 @@ static void yield_task_fair(struct rq *rq)
+@@ -7770,21 +7852,19 @@ static void yield_task_fair(struct rq *rq)
  
  	clear_buddies(cfs_rq, se);
  
@@ -1489,7 +1495,7 @@ index 32597673f..8859170ad 100644
  }
  
  static bool yield_to_task_fair(struct rq *rq, struct task_struct *p)
-@@ -8029,8 +8102,7 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
+@@ -8029,8 +8109,7 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
  	 * Buddy candidates are cache hot:
  	 */
  	if (sched_feat(CACHE_HOT_BUDDY) && env->dst_rq->nr_running &&
@@ -1499,7 +1505,7 @@ index 32597673f..8859170ad 100644
  		return 1;
  
  	if (sysctl_sched_migration_cost == -1)
-@@ -11341,8 +11413,8 @@ static void rq_offline_fair(struct rq *rq)
+@@ -11341,8 +11420,8 @@ static void rq_offline_fair(struct rq *rq)
  static inline bool
  __entity_slice_used(struct sched_entity *se, int min_nr_tasks)
  {
@@ -1509,7 +1515,7 @@ index 32597673f..8859170ad 100644
  
  	return (rtime * min_nr_tasks > slice);
  }
-@@ -11494,22 +11566,9 @@ static void task_fork_fair(struct task_struct *p)
+@@ -11494,22 +11573,9 @@ static void task_fork_fair(struct task_struct *p)
  
  	cfs_rq = task_cfs_rq(current);
  	curr = cfs_rq->curr;
@@ -1534,7 +1540,7 @@ index 32597673f..8859170ad 100644
  	rq_unlock(rq, &rf);
  }
  
-@@ -11538,34 +11597,6 @@ prio_changed_fair(struct rq *rq, struct task_struct *p, int oldprio)
+@@ -11538,34 +11604,6 @@ prio_changed_fair(struct rq *rq, struct task_struct *p, int oldprio)
  		check_preempt_curr(rq, p, 0);
  }
  
@@ -1569,7 +1575,7 @@ index 32597673f..8859170ad 100644
  #ifdef CONFIG_FAIR_GROUP_SCHED
  /*
   * Propagate the changes of the sched_entity across the tg tree to make it
-@@ -11630,16 +11661,6 @@ static void attach_entity_cfs_rq(struct sched_entity *se)
+@@ -11630,16 +11668,6 @@ static void attach_entity_cfs_rq(struct sched_entity *se)
  static void detach_task_cfs_rq(struct task_struct *p)
  {
  	struct sched_entity *se = &p->se;
@@ -1586,7 +1592,7 @@ index 32597673f..8859170ad 100644
  
  	detach_entity_cfs_rq(se);
  }
-@@ -11647,12 +11668,8 @@ static void detach_task_cfs_rq(struct task_struct *p)
+@@ -11647,12 +11675,8 @@ static void detach_task_cfs_rq(struct task_struct *p)
  static void attach_task_cfs_rq(struct task_struct *p)
  {
  	struct sched_entity *se = &p->se;
@@ -1599,7 +1605,7 @@ index 32597673f..8859170ad 100644
  }
  
  static void switched_from_fair(struct rq *rq, struct task_struct *p)
-@@ -12026,7 +12043,7 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
+@@ -12026,7 +12050,7 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
  	 * idle runqueue:
  	 */
  	if (rq->cfs.load.weight)
@@ -1608,53 +1614,6 @@ index 32597673f..8859170ad 100644
  
  	return rr_interval;
  }
-diff --git a/kernel/sched/features.h b/kernel/sched/features.h
-index 7f8dace09..e21b851ef 100644
---- a/kernel/sched/features.h
-+++ b/kernel/sched/features.h
-@@ -1,16 +1,11 @@
- /* SPDX-License-Identifier: GPL-2.0 */
- /*
-- * Only give sleepers 50% of their service deficit. This allows
-- * them to run sooner, but does not allow tons of sleepers to
-- * rip the spread apart.
-+ * Using the avg_vruntime, do the right thing and preserve lag across
-+ * sleep+wake cycles. EEVDF placement strategy #1, #2 if disabled.
-  */
--SCHED_FEAT(GENTLE_FAIR_SLEEPERS, true)
--
--/*
-- * Place new tasks ahead so that they do not starve already running
-- * tasks
-- */
--SCHED_FEAT(START_DEBIT, true)
-+SCHED_FEAT(PLACE_LAG, true)
-+SCHED_FEAT(PLACE_DEADLINE_INITIAL, true)
-+SCHED_FEAT(RUN_TO_PARITY, true)
- 
- /*
-  * Prefer to schedule the task we woke last (assuming it failed
-@@ -19,13 +14,6 @@ SCHED_FEAT(START_DEBIT, true)
-  */
- SCHED_FEAT(NEXT_BUDDY, false)
- 
--/*
-- * Prefer to schedule the task that ran last (when we did
-- * wake-preempt) as that likely will touch the same data, increases
-- * cache locality.
-- */
--SCHED_FEAT(LAST_BUDDY, true)
--
- /*
-  * Consider buddies to be cache hot, decreases the likeliness of a
-  * cache buddy being migrated away, increases cache locality.
-@@ -92,6 +80,3 @@ SCHED_FEAT(UTIL_EST, true)
- SCHED_FEAT(UTIL_EST_FASTUP, true)
- 
- SCHED_FEAT(LATENCY_WARN, false)
--
--SCHED_FEAT(ALT_PERIOD, true)
--SCHED_FEAT(BASE_SLICE, true)
 diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
 index 509643bd0..e600fabe2 100644
 --- a/kernel/sched/sched.h
