@@ -76,6 +76,23 @@ config:
   CONFIG_FUNCTION_ERROR_INJECTION: n
   CONFIG_WQ_WATCHDOG: n
 
+  # ---- 网络：启用 BBR 拥塞控制 ----
+  # 现状：gki_defconfig 没开 TCP_CONG_ADVANCED，设备上
+  #   /proc/sys/net/ipv4/tcp_available_congestion_control = "reno cubic"
+  # 所以得先开菜单，再把 BBR 编进内核并设为默认（BBR 要 =y 才能出现在默认选择的 choice 里）。
+  # BBR 自己不做「省电」，但在蜂窝/WiFi 上靠 pacing 削缓冲膨胀、少触发重传，
+  # 间接减少无线侧发射时间。想临时退回（cubic 仍在内核里，不用重刷）：
+  #   su -c 'sysctl -w net.ipv4.tcp_congestion_control=cubic'
+  # 前提 NET_SCH_FQ=y（BBR 的 pacing 要 fq 队列），gki_defconfig 已经有了。
+  CONFIG_TCP_CONG_ADVANCED: y
+  CONFIG_TCP_CONG_BBR: y
+  CONFIG_DEFAULT_BBR: y          # choice 里的 BBR 项，据此把 DEFAULT_TCP_CONG 算成 "bbr"
+  CONFIG_DEFAULT_TCP_CONG: bbr   # 冗余但写上：回读校验会证明它确实变成了 "bbr"
+  # 开了 ADVANCED 后，这三项在 Kconfig 里默认是 m（会平白多编 3 个 .ko），钉回 n 保持现状。
+  CONFIG_TCP_CONG_BIC: n
+  CONFIG_TCP_CONG_WESTWOOD: n
+  CONFIG_TCP_CONG_HTCP: n
+
   # ---- 待定：真正影响「息屏待机」的一项，风险与收益都大，单独一轮再试 ----
   # CONFIG_RCU_LAZY_DEFAULT_OFF: n   # 打开 RCU 惰性回调（设备 cmdline 已有 rcu_nocbs=0-7，
   #                                  # 条件齐了）：空闲 CPU 不再被 RCU 回调唤醒，是 Google
