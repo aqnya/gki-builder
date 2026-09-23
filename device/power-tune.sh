@@ -14,6 +14,7 @@ set -u
 WATCHDOG=/proc/sys/kernel/watchdog
 SCHEDSTATS=/proc/sys/kernel/sched_schedstats
 KFENCE=/sys/module/kfence/parameters/sample_interval
+RCU_LAZY=/sys/module/rcutree/parameters/enable_rcu_lazy
 CPUIDLE=/sys/devices/system/cpu/cpuidle/current_governor
 BAK=/data/local/tmp/.power-tune.bak
 
@@ -62,10 +63,11 @@ case "${1:-report}" in
     echo "  kfence 抽样     $KFENCE        = $(cat_val "$KFENCE")"
     echo
     echo "== 电源相关 =="
+    echo "  rcu lazy         = $(cat_val "$RCU_LAZY")   （本机默认关；实测打开会卡第一屏，见 config.yml）"
     echo "  cpuidle governor = $(cat_val "$CPUIDLE")   （本机是厂商的 qcom-cpu-lpm；若哪天变成 menu，可对比试 teo）"
     echo "  cpu0 governor    = $(cat_val /sys/devices/system/cpu/cpufreq/policy0/scaling_governor)"
     echo "  mglru            = $(cat_val /sys/kernel/mm/lru_gen/enabled)  min_ttl_ms=$(cat_val /sys/kernel/mm/lru_gen/min_ttl_ms)"
-    echo "  cmdline 相关项   = $(grep -oE 'kasan=[a-z]+|kfence[^ ]*|nowatchdog|init_on_[a-z]+=[01]' /proc/cmdline 2>/dev/null | tr '\n' ' ')"
+    echo "  cmdline 相关项   = $(grep -oE 'kasan=[a-z]+|kfence[^ ]*|nowatchdog|init_on_[a-z]+=[01]|enable_rcu_lazy=[01]' /proc/cmdline 2>/dev/null | tr '\n' ' ')"
     ;;
 
   apply)

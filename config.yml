@@ -70,6 +70,15 @@ config:
   CONFIG_NET_SCH_DEFAULT: y
   CONFIG_NET_SCH_FQ: y
   CONFIG_DEFAULT_FQ: y
+
+  # ---- 省电批次 3：RCU 惰性回调 —— ❌ 实测不开机（卡第一屏），永久停用 ----
+  # 把 CONFIG_RCU_LAZY_DEFAULT_OFF 从 y 翻成 n（= 让 enable_rcu_lazy 默认 true）后，
+  # 2026-09-24 刷入卡第一屏。与之前几次变砖不同：check_kmi / check_abi_pinned 全绿，
+  # 不是符号或结构体布局问题，是纯运行时行为。可能机制：lazy 把回调攒批、推迟 GP，
+  # 而设备带 kernel.panic_on_rcu_stall=1 —— 早期启动阶段一旦触发 RCU stall 就 panic。
+  # 结论：在能抓到日志（pstore / console）并确认 rcu_nocbs 真覆盖全部 CPU 之前，
+  # 不要再动这一项。保持 gki_defconfig 原值（DEFAULT_OFF=y，lazy 关闭）。
+  # CONFIG_RCU_LAZY_DEFAULT_OFF: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
