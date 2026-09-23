@@ -1,6 +1,6 @@
-commit 9cb724fb9a2dbd78015cdd6fcbb28a10a17a26bf
+commit 7edd5cf3722ddbdb27c4899180b206f508501ebb
 Author: aqnya <xiaweilan56@gmail.com>
-Date:   Wed Sep 23 09:08:27 2026 +0800
+Date:   Wed Sep 23 09:28:05 2026 +0800
 
     backport: add ntsync.
 
@@ -37,10 +37,10 @@ index a109b9cb6..b299210a6 100644
 +obj-$(CONFIG_NTSYNC)		+= ntsync.o
 diff --git a/drivers/misc/ntsync.c b/drivers/misc/ntsync.c
 new file mode 100644
-index 000000000..69cda58ac
+index 000000000..41b8ccab5
 --- /dev/null
 +++ b/drivers/misc/ntsync.c
-@@ -0,0 +1,1258 @@
+@@ -0,0 +1,1259 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * ntsync.c - Kernel driver for NT synchronization primitives
@@ -795,7 +795,7 @@ index 000000000..69cda58ac
 +{
 +	struct ntsync_obj *obj;
 +
-+	obj = kzalloc_obj(*obj);
++	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
 +	if (!obj)
 +		return NULL;
 +	obj->type = type;
@@ -1237,7 +1237,8 @@ index 000000000..69cda58ac
 +{
 +	struct ntsync_device *dev;
 +
-+	dev = kzalloc_obj(*dev);
++	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
++	
 +	if (!dev)
 +		return -ENOMEM;
 +
