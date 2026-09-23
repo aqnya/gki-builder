@@ -57,3 +57,35 @@ GKI 内核之上跑着一堆**二进制**厂商模块（本机 `/vendor/lib/modu
 
 改 `CONFIG_*` 或补丁时，护栏报错就是"这一改会不开机"，别用
 `SKIP_KMI_CHECK=1` 绕过去 —— 那等于直接刷砖。
+
+## 注意 #2：不只是符号 —— **结构体布局**变了照样变砖
+
+上面那道护栏只保证「**符号**还在」。但厂商模块是二进制，**结构体里的字段偏移是
+编译期烤进 .ko 的**：关掉一个出现在模块可见结构体定义里的 `CONFIG_*`，会删掉结构体
+成员，让它后面**所有**字段的偏移整体前移，模块通过野指针读内存 → 卡 logo，
+一样没有 panic、一样抓不到日志；而符号一个都没少，所以 KMI 护栏会全绿放行。
+
+2026-09-23 实测（第三次卡 logo，护栏 0 缺失）：
+
+| 关掉的项 | 后果 |
+|---|---|
+| `CONFIG_SCHEDSTATS` | `struct sched_statistics` 里 29 个 u64 全被 `#ifdef` 掉，而 `sched_entity` 里那个字段是无条件保留的 → `se` 之后每个字段前移约 **232 字节** |
+| `CONFIG_TASK_XACCT` | `task_struct` 少 `acct_rss_mem1/acct_vm_mem1/acct_timexpd` → 前移 24 字节 |
+| `CONFIG_PAGE_OWNER` | `task_struct` 少 `in_page_owner:1` 位域（位域共享存储单元，会影响同单元后续位域） |
+
+所以有两条防线：
+
+1. **`scripts/abi-pinned-configs.txt` + `build.sh` 的 `check_abi_pinned`**：
+   在**编译之前**把 `config.yml` 里动过的项和 `gki_defconfig` 的取值比对，
+   动了红线项立即 FAIL（省 30 分钟）。判定方法写在文件头：
+   `grep -rn 'CONFIG_<该项>' include/` —— 只要它出现在某个 struct 定义内部，就不能动。
+2. **`scripts/abi_layout.py`**：刷机前的深度验证，用 BTF 直接看结构体大小和成员偏移。
+   设备上能开机的内核就有现成的参考：
+
+   ```bash
+   su -c 'cp /sys/kernel/btf/vmlinux /data/local/tmp/btf.ref'      # 参考：能开机的布局
+   python3 scripts/abi_layout.py diff /data/local/tmp/btf.ref dist/Image   # 差异非空就别刷
+   python3 scripts/abi_layout.py dump  /data/local/tmp/btf.ref task_struct # 看具体偏移
+   ```
+
+   这条比护栏更通用：名单只能挡已知的几个，BTF 比对能挡住**任何**布局改动。
