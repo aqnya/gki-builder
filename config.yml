@@ -62,6 +62,14 @@ config:
   CONFIG_TCP_CONG_BIC: n
   CONFIG_TCP_CONG_WESTWOOD: n
   CONFIG_TCP_CONG_HTCP: n
+  # 默认队列算法 = fq（配合上面的 BBR：TCP 栈塞进 sk_pacing_rate 的 pacing 只有 fq 会照做，
+  # 见 net/sched/Kconfig 的 FQ 说明）。三项缺一不可：
+  #   NET_SCH_DEFAULT 不打开的话，下面的 DEFAULT_FQ 会被 Kconfig 直接丢掉（回读校验会报错）
+  #   NET_SCH_FQ 必须内置（=y）——默认 qdisc 是 late_initcall 里按名字查注册表设的，
+  #   模块还没加载。gki_defconfig 里本来就是 y，这里显式钉住防漂移
+  CONFIG_NET_SCH_DEFAULT: y
+  CONFIG_NET_SCH_FQ: y
+  CONFIG_DEFAULT_FQ: y
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
