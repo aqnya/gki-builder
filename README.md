@@ -8,8 +8,9 @@
 | 开关内核 config | [`config.yml`](config.yml) 的 `config:` |
 | 指定编译哪个 commit | [`config.yml`](config.yml) 的 `kernel.commit` |
 | 加补丁 | 丢进 [`patches/`](patches/) |
+| 改刷机包（设备名 / BLOCK / 打包内容） | [`ak3/`](ak3/) 里的 AnyKernel3 模板 |
 
-改完推到 `main`（且改动命中 `config.yml` 或 `patches/**`）会自动编译，
+改完推到 `main`（且改动命中 `config.yml`、`patches/**` 或 `ak3/**`）会自动编译，
 也可以在 **Actions → Build GKI → Run workflow** 手动触发。
 
 ## 快速开始
@@ -68,6 +69,30 @@ git ls-remote https://android.googlesource.com/kernel/common refs/heads/android1
 见 [`patches/README.md`](patches/README.md)。零填充文件名控制顺序，补丁打在 `common/` 目录上，
 用 `git apply` 严格匹配（无 fuzz，上下文必须逐行命中）。
 
+### 4. 改刷机包（AK3）
+
+打包用的 AnyKernel3 模板就在仓库的 [`ak3/`](ak3/) 里，**构建时不再去 clone 上游**——
+`ak3/anykernel.sh` 就是你改的那份，直接编辑并提交即可（改动会命中 `ak3/**`，自动触发编译）。
+
+至少要改这两处，否则刷到真机上会被 devicecheck 拦下：
+
+```sh
+# ak3/anykernel.sh
+properties() { '
+kernel.string=...            # 每次构建会被自动覆盖成 GKI <branch> (<sha12>)
+do.devicecheck=1             # 1 = 校验设备名，填错就直接拒绝安装
+device.name1=你的设备代号      # 上游示例是 maguro/toro/toroplus/tuna
+'; }
+
+BLOCK=/dev/block/by-name/boot;   # 上游示例是 omap 的路径，GKI 设备一般是 by-name
+```
+
+其它可改的：`do.modules`（要不要刷 modules）、`do.systemless`、`do.cleanup`、
+`ramdisk/`（overlay.d 里要放的文件）、`patch/`（要打进 ramdisk 的补丁）。
+详细说明见上游仓库 [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3)。
+
+> 构建时会 `cp -a ak3/ .work/AnyKernel3` 再往里塞 `Image`，所以仓库里的 `ak3/` 一直是干净的。
+
 ## 源码怎么来的
 
 用 `repo` 而不是裸 `git clone`：
@@ -114,7 +139,7 @@ sync:
 构建成功后 artifact 里有：
 
 - `Image` —— 原始内核镜像（若存在还会带 `Image.gz` / `dtb` / `dtbo`）
-- `AnyKernel3.zip` —— 可在 recovery / KernelSU 里直接刷的包
+- `AnyKernel3.zip` —— 可在 recovery / KernelSU 里直接刷的包，模板取自仓库的 [`ak3/`](ak3/)
 - `kernel.config` —— 实际生效的完整 `.config`，便于复查
 
 ## 本地跑
@@ -141,7 +166,7 @@ config.yml ──► parse_config.py ──► 校验 ──► build.sh
    4. patches/*.patch 按序 git apply --check 后应用到 common/
    5. gki_defconfig → scripts/config → olddefconfig → 回读校验
    6. make Image
-   7. 打包 Image + AnyKernel3.zip → upload-artifact
+   7. 用仓库自带的 ak3/ 打包 Image → dist/AnyKernel3.zip → upload-artifact
 ```
 
 CI 侧还会先回收 runner 磁盘（只保证 14GB，不够）并加 16GB swap（防链接阶段 OOM），

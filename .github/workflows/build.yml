@@ -7,6 +7,8 @@ on:
     paths:
       - config.yml
       - 'patches/**'
+      # AK3 模板在仓库里，改了要重新打包（否则刷机包还是旧的那份）
+      - 'ak3/**'
       # 护栏脚本/名单改动也要重跑一遍，确认护栏本身还是通的
       - 'scripts/**'
       - '.github/workflows/**'

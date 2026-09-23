@@ -50,6 +50,7 @@ SRC="$WORK/src"                 # repo 工作区
 KERNEL_SRC="$SRC/common"        # kernel/common 在 manifest 里的 path
 OUT="$WORK/out"
 DIST="$ROOT/dist"
+AK3_DIR="$ROOT/ak3"             # 仓库自带的 AnyKernel3 模板（改过的），不再 clone 上游
 mkdir -p "$WORK" "$DIST"
 
 summary_lines=()
@@ -377,20 +378,42 @@ package() {
   done
   cp "$OUT/.config" "$DIST/kernel.config"
 
-  info "打包 AnyKernel3"
+  info "打包 AnyKernel3（用仓库自带的 ak3/）"
+  # AK3 模板跟着仓库走（ak3/），不再每次 clone 上游 —— 改过的 anykernel.sh
+  # （设备名、BLOCK、do.* 开关）就是构建时实际使用的那份。
+  [[ -f "$AK3_DIR/anykernel.sh" ]] \
+    || die "找不到 $AK3_DIR/anykernel.sh：ak3/ 里要放一份完整的 AnyKernel3（含 anykernel.sh、META-INF/、tools/）"
+  [[ -f "$AK3_DIR/tools/ak3-core.sh" ]] \
+    || die "ak3/tools/ak3-core.sh 不存在，AnyKernel3 模板不完整（anykernel.sh 会 source 它）"
+  [[ -f "$AK3_DIR/META-INF/com/google/android/update-binary" ]] \
+    || die "ak3/META-INF/com/google/android/update-binary 不存在，AnyKernel3 模板不完整（刷机脚本入口）"
+
   local ak3="$WORK/AnyKernel3"
   rm -rf "$ak3"
-  git clone -q --depth=1 https://github.com/osm0sis/AnyKernel3 "$ak3" \
-    || die "克隆 AnyKernel3 失败"
+  cp -a "$AK3_DIR" "$ak3"        # 复制一份再动：ak3/ 保持干净，Image 只进 .work/
+  rm -rf "$ak3/.git"
+
   cp "$DIST/Image" "$ak3/Image"
   sed -i "s/^kernel.string=.*/kernel.string=GKI ${KERNEL_BRANCH} (${KERNEL_SHA:0:12})/" \
     "$ak3/anykernel.sh" 2>/dev/null || true
+
+  # 模板还带着上游示例值就提醒一声：devicecheck 是拿示例设备名（maguro 等）校验的，
+  # 刷到真机上会被直接拒绝安装 —— 免得下完包刷失败才发现。
+  if grep -q '^device\.name1=maguro' "$ak3/anykernel.sh" \
+     || grep -q 'ExampleKernel by osm0sis' "$ak3/anykernel.sh"; then
+    echo "::warning::ak3/anykernel.sh 还是上游示例（device.name1=maguro / ExampleKernel）：按示例里的设备名做 devicecheck，刷到真机上会被拒绝。记得改 device.name* 和 BLOCK。"
+    summary_lines+=("| AK3 模板 | ⚠️ anykernel.sh 仍是上游示例（device.name/BLOCK 未改） |")
+  else
+    summary_lines+=("| AK3 模板 | \`ak3/anykernel.sh\`（仓库自带） |")
+  fi
 
   if ! command -v zip >/dev/null; then
     info "安装 zip"
     sudo apt-get update -qq && sudo apt-get install -y -qq zip
   fi
-  ( cd "$ak3" && rm -f "$DIST/AnyKernel3.zip" && zip -qr9 "$DIST/AnyKernel3.zip" . -x '*.git*' )
+  # README* 是仓库侧的说明，不进刷机包（上游发版也不带）
+  ( cd "$ak3" && rm -f "$DIST/AnyKernel3.zip" \
+      && zip -qr9 "$DIST/AnyKernel3.zip" . -x '*.git*' 'README*' )
 
   [[ -s "$DIST/AnyKernel3.zip" ]] || die "AnyKernel3.zip 生成失败"
   summary_lines+=("| 产物 | \`Image\` + \`AnyKernel3.zip\` |")
