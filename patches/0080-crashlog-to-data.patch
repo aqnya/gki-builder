@@ -349,7 +349,7 @@ index 3d90d42a7..9599512c4 100644
  
 +config CRASHLOG
 +	bool "Save the kernel log to a file when the kernel panics"
-+	default n
++	default y
 +	help
 +	  Keep a file open on a writable filesystem (by default
 +	  /data/kernel-crash.log) and append the whole kernel log to it,
