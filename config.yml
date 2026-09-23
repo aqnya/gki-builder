@@ -47,6 +47,13 @@ config:
   CONFIG_LRU_GEN_ENABLED: y
   CONFIG_LOCALVERSION: "-android13-8"
   CONFIG_NTSYNC: y
+  # 关闭 UBSAN / KASAN（arm64 GKI 的 KASAN 走 KASAN_HW_TAGS，即 MTE 硬件标签模式）。
+  # 注意：UBSAN_TRAP / UBSAN_LOCAL_BOUNDS / KASAN_HW_TAGS 这些子项依赖父项，
+  # 父项关掉后它们会整体从 .config 里消失（--state 读到 undef），
+  # 所以这里只列父项，别把子项也写进来 —— 否则回读校验会判失败。
+  # 这两项不影响 KFENCE（独立开关，保持 defconfig 的 y）。
+  CONFIG_UBSAN: n
+  CONFIG_KASAN: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
