@@ -86,7 +86,7 @@ index 3d1b5810c..a89d49040 100644
  	P(sysctl_sched_features);
  #undef PN
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
-index 32597673f..a84b8b9a8 100644
+index 32597673f..8859170ad 100644
 --- a/kernel/sched/fair.c
 +++ b/kernel/sched/fair.c
 @@ -20,6 +20,8 @@
@@ -1489,7 +1489,17 @@ index 32597673f..a84b8b9a8 100644
  }
  
  static bool yield_to_task_fair(struct rq *rq, struct task_struct *p)
-@@ -11341,8 +11414,8 @@ static void rq_offline_fair(struct rq *rq)
+@@ -8029,8 +8102,7 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
+ 	 * Buddy candidates are cache hot:
+ 	 */
+ 	if (sched_feat(CACHE_HOT_BUDDY) && env->dst_rq->nr_running &&
+-			(&p->se == cfs_rq_of(&p->se)->next ||
+-			 &p->se == cfs_rq_of(&p->se)->last))
++			(&p->se == cfs_rq_of(&p->se)->next))
+ 		return 1;
+ 
+ 	if (sysctl_sched_migration_cost == -1)
+@@ -11341,8 +11413,8 @@ static void rq_offline_fair(struct rq *rq)
  static inline bool
  __entity_slice_used(struct sched_entity *se, int min_nr_tasks)
  {
@@ -1499,7 +1509,7 @@ index 32597673f..a84b8b9a8 100644
  
  	return (rtime * min_nr_tasks > slice);
  }
-@@ -11494,22 +11567,9 @@ static void task_fork_fair(struct task_struct *p)
+@@ -11494,22 +11566,9 @@ static void task_fork_fair(struct task_struct *p)
  
  	cfs_rq = task_cfs_rq(current);
  	curr = cfs_rq->curr;
@@ -1524,7 +1534,7 @@ index 32597673f..a84b8b9a8 100644
  	rq_unlock(rq, &rf);
  }
  
-@@ -11538,34 +11598,6 @@ prio_changed_fair(struct rq *rq, struct task_struct *p, int oldprio)
+@@ -11538,34 +11597,6 @@ prio_changed_fair(struct rq *rq, struct task_struct *p, int oldprio)
  		check_preempt_curr(rq, p, 0);
  }
  
@@ -1559,7 +1569,7 @@ index 32597673f..a84b8b9a8 100644
  #ifdef CONFIG_FAIR_GROUP_SCHED
  /*
   * Propagate the changes of the sched_entity across the tg tree to make it
-@@ -11630,16 +11662,6 @@ static void attach_entity_cfs_rq(struct sched_entity *se)
+@@ -11630,16 +11661,6 @@ static void attach_entity_cfs_rq(struct sched_entity *se)
  static void detach_task_cfs_rq(struct task_struct *p)
  {
  	struct sched_entity *se = &p->se;
@@ -1576,7 +1586,7 @@ index 32597673f..a84b8b9a8 100644
  
  	detach_entity_cfs_rq(se);
  }
-@@ -11647,12 +11669,8 @@ static void detach_task_cfs_rq(struct task_struct *p)
+@@ -11647,12 +11668,8 @@ static void detach_task_cfs_rq(struct task_struct *p)
  static void attach_task_cfs_rq(struct task_struct *p)
  {
  	struct sched_entity *se = &p->se;
@@ -1589,7 +1599,7 @@ index 32597673f..a84b8b9a8 100644
  }
  
  static void switched_from_fair(struct rq *rq, struct task_struct *p)
-@@ -12026,7 +12044,7 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
+@@ -12026,7 +12043,7 @@ static unsigned int get_rr_interval_fair(struct rq *rq, struct task_struct *task
  	 * idle runqueue:
  	 */
  	if (rq->cfs.load.weight)
@@ -1646,20 +1656,39 @@ index 7f8dace09..e21b851ef 100644
 -SCHED_FEAT(ALT_PERIOD, true)
 -SCHED_FEAT(BASE_SLICE, true)
 diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
-index 509643bd0..986e2c8a0 100644
+index 509643bd0..e600fabe2 100644
 --- a/kernel/sched/sched.h
 +++ b/kernel/sched/sched.h
-@@ -542,6 +542,9 @@ struct cfs_rq {
- 	unsigned int		h_nr_running;      /* SCHED_{NORMAL,BATCH,IDLE} */
- 	unsigned int		idle_h_nr_running; /* SCHED_IDLE */
+@@ -561,8 +561,28 @@ struct cfs_rq {
+ 	 */
+ 	struct sched_entity	*curr;
+ 	struct sched_entity	*next;
++#ifdef __GENKSYMS__
++	/*
++	 * Genksyms view: keep the original members so the exported type CRCs
++	 * (notably `runqueues`, whose type embeds struct cfs_rq) stay stable.
++	 */
+ 	struct sched_entity	*last;
+ 	struct sched_entity	*skip;
++#else
++	/*
++	 * EEVDF: the ->last / ->skip buddies are unused. Reuse their storage
++	 * for the weighted-average virtual runtime and load so struct cfs_rq
++	 * (and therefore struct rq / runqueues) does not change size.
++	 */
++	union {
++		struct sched_entity *last;
++		s64 avg_vruntime;
++	};
++	union {
++		struct sched_entity *skip;
++		u64 avg_load;
++	};
++#endif
  
-+	s64			avg_vruntime;
-+	u64			avg_load;
-+
- 	u64			exec_clock;
- 	u64			min_vruntime;
- #ifdef CONFIG_SCHED_CORE
-@@ -2162,6 +2165,7 @@ extern const u32		sched_prio_to_wmult[40];
+ #ifdef	CONFIG_SCHED_DEBUG
+ 	unsigned int		nr_spread_over;
+@@ -2162,6 +2182,7 @@ extern const u32		sched_prio_to_wmult[40];
  #endif
  
  #define ENQUEUE_WAKEUP_SYNC	0x80
@@ -1667,7 +1696,7 @@ index 509643bd0..986e2c8a0 100644
  
  #define RETRY_TASK		((void *)-1UL)
  
-@@ -2457,9 +2461,7 @@ extern const_debug unsigned int sysctl_sched_nr_migrate;
+@@ -2457,9 +2478,7 @@ extern const_debug unsigned int sysctl_sched_nr_migrate;
  extern const_debug unsigned int sysctl_sched_migration_cost;
  
  #ifdef CONFIG_SCHED_DEBUG
@@ -1678,7 +1707,7 @@ index 509643bd0..986e2c8a0 100644
  extern int sysctl_resched_latency_warn_ms;
  extern int sysctl_resched_latency_warn_once;
  
-@@ -2753,6 +2755,9 @@ static inline void double_rq_unlock(struct rq *rq1, struct rq *rq2)
+@@ -2753,6 +2772,9 @@ static inline void double_rq_unlock(struct rq *rq1, struct rq *rq2)
  extern struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq);
  extern struct sched_entity *__pick_last_entity(struct cfs_rq *cfs_rq);
  
