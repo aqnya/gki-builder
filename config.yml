@@ -72,8 +72,6 @@ config:
   CONFIG_DEFAULT_FQ: y
   
   CONFIG_UBSAN: n
-  CONFIG_UBSAN_TRAP: n
-  CONFIG_UBSAN_LOCAL_BOUNDS: n
   CONFIG_CMDLINE: "stack_depot_disable=on kasan=off kvm-arm.mode=protected cgroup_disable=pressure noirqdebug"
 
   # ---- 省电批次 3：RCU 惰性回调 —— ❌ 实测不开机（卡第一屏），永久停用 ----
