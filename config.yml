@@ -90,7 +90,7 @@ config:
   # 而设备带 kernel.panic_on_rcu_stall=1 —— 早期启动阶段一旦触发 RCU stall 就 panic。
   # 结论：在能抓到日志（pstore / console）并确认 rcu_nocbs 真覆盖全部 CPU 之前，
   # 不要再动这一项。保持 gki_defconfig 原值（DEFAULT_OFF=y，lazy 关闭）。
-   CONFIG_RCU_LAZY_DEFAULT_OFF: n
+  CONFIG_RCU_LAZY_DEFAULT_OFF: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
