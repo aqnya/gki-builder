@@ -71,8 +71,17 @@ config:
   CONFIG_NET_SCH_FQ: y
   CONFIG_DEFAULT_FQ: y
   
-  CONFIG_UBSAN: n
   CONFIG_CMDLINE: "stack_depot_disable=on kasan=off kvm-arm.mode=protected cgroup_disable=pressure noirqdebug"
+
+  # ---- cpuidle：用厂商的 qcom-lpm 替代 TEO ----
+  # 厂商内核默认 governor 就是 qcom-lpm（见 device/power-tune.sh：
+  # current_governor=qcom-cpu-lpm）。GKI 默认是 teo，这里关掉 teo、开回移的
+  # qcom-lpm。rating：qcom-lpm=50 > menu=20，所以 qcom-lpm 会成为默认；
+  # menu 保留作运行时兜底（echo menu > cpuidle/current_governor 可切回）。
+  # 补丁 0090-cpuidle-qcom-lpm.patch；WALT 相关的 bias 逻辑因 GKI 不带
+  # CONFIG_SCHED_WALT 而自动编译掉，其余（预测/cluster/PM QoS 通知）完整保留。
+  CONFIG_CPU_IDLE_GOV_TEO: n
+  CONFIG_CPU_IDLE_GOV_QCOM_LPM: y
 
   # ---- 省电批次 3：RCU 惰性回调 —— ❌ 实测不开机（卡第一屏），永久停用 ----
   # 把 CONFIG_RCU_LAZY_DEFAULT_OFF 从 y 翻成 n（= 让 enable_rcu_lazy 默认 true）后，
