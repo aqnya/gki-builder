@@ -73,23 +73,8 @@ config:
   
   CONFIG_CMDLINE: "stack_depot_disable=on kasan=off kvm-arm.mode=protected cgroup_disable=pressure noirqdebug rcupdate.rcu_expedited=0 kernel.panic_on_rcu_stall=0 rcu_nocbs=all"
 
-  # ---- cpuidle：用厂商的 qcom-lpm 替代 TEO ----
-  # 厂商内核默认 governor 就是 qcom-lpm（见 device/power-tune.sh：
-  # current_governor=qcom-cpu-lpm）。GKI 默认是 teo，这里关掉 teo、开回移的
-  # qcom-lpm。rating：qcom-lpm=50 > menu=20，所以 qcom-lpm 会成为默认；
-  # menu 保留作运行时兜底（echo menu > cpuidle/current_governor 可切回）。
-  # 补丁 0090-cpuidle-qcom-lpm.patch；WALT 相关的 bias 逻辑因 GKI 不带
-  # CONFIG_SCHED_WALT 而自动编译掉，其余（预测/cluster/PM QoS 通知）完整保留。
   CONFIG_CPU_IDLE_GOV_TEO: n
   CONFIG_CPU_IDLE_GOV_QCOM_LPM: y
-
-  # ---- 省电批次 3：RCU 惰性回调 —— ❌ 实测不开机（卡第一屏），永久停用 ----
-  # 把 CONFIG_RCU_LAZY_DEFAULT_OFF 从 y 翻成 n（= 让 enable_rcu_lazy 默认 true）后，
-  # 2026-09-24 刷入卡第一屏。与之前几次变砖不同：check_kmi / check_abi_pinned 全绿，
-  # 不是符号或结构体布局问题，是纯运行时行为。可能机制：lazy 把回调攒批、推迟 GP，
-  # 而设备带 kernel.panic_on_rcu_stall=1 —— 早期启动阶段一旦触发 RCU stall 就 panic。
-  # 结论：在能抓到日志（pstore / console）并确认 rcu_nocbs 真覆盖全部 CPU 之前，
-  # 不要再动这一项。保持 gki_defconfig 原值（DEFAULT_OFF=y，lazy 关闭）。
   CONFIG_RCU_LAZY_DEFAULT_OFF: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
