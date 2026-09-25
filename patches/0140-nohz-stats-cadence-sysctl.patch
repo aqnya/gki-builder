@@ -1,0 +1,88 @@
+# NOHZ idle-load-balancer 刷新 idle CPU blocked load 的节奏 → 运行期旋钮
+#
+# 背景：0050 已把该节奏从 LOAD_AVG_PERIOD(32ms) 抬到 4x = 128ms。idle CPU 的
+# blocked load 只由 nohz ILB 周期刷新，太密会反复把 idle CPU 从空闲里叫醒
+# （IPI + 遍历每个 idle CPU 的 blocked load）去更新一份 placement 用不上的统计
+# （vermeer 的放置由厂商 WALT 决定，见 memory vermeer-scheduler-reality）。
+#
+# 本补丁不把数值写死，而是暴露运行期旋钮：
+#     /proc/sys/kernel/sched_nohz_stats_ms
+# 默认 256ms（8 * LOAD_AVG_PERIOD），比 0050 再少一半 idle-CPU 唤醒；随后可
+#     echo 128  > /proc/sys/kernel/sched_nohz_stats_ms   # 回到 0050 行为
+#     echo 1024 > /proc/sys/kernel/sched_nohz_stats_ms   # 再降 4 倍
+# 随时 A/B，不用刷机。写 0 也接受（等价按 tick 刷新，用于对照）。
+#
+# 保 KMI：只加一个 unsigned int 全局 + 一条 sysctl 表项（SYSCTL_ZERO..
+# SYSCTL_INT_MAX），不动任何结构体、不增删导出符号。
+#
+# 依赖：0050-sched-nohz-stats-cadence.patch —— 改的就是它设的那一行/注释。
+#
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -64,6 +64,15 @@
+ 
+ const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
+ 
++/*
++ * Cadence (in milliseconds) at which the NOHZ idle load balancer refreshes
++ * the blocked load of idle CPUs.  Default 256 == 8 * LOAD_AVG_PERIOD
++ * (32ms); see _nohz_idle_balance().  Exposed to userspace as
++ * /proc/sys/kernel/sched_nohz_stats_ms so it can be raised to cut idle-CPU
++ * wakeups (or lowered to restore the previous cadence) without a reflash.
++ */
++unsigned int sysctl_sched_nohz_stats_ms = 256;
++
+ int sched_thermal_decay_shift;
+ static int __init setup_sched_thermal_decay_shift(char *str)
+ {
+@@ -11184,11 +11193,14 @@
+ 	 * timer only has to stop the statistics from going stale for good.
+ 	 * Keeping it at LOAD_AVG_PERIOD means waking an idle CPU out of idle
+ 	 * up to 30 times a second (IPI plus a walk of every idle CPU's blocked
+-	 * load) for no placement benefit; a quarter of that rate is plenty.
++	 * load) for no placement benefit.  The cadence is a runtime knob
++	 * (sched_nohz_stats_ms) defaulting to 8 * LOAD_AVG_PERIOD, so it can
++	 * be tuned longer on devices whose placement is decided at wakeup
++	 * time (and where this is pure bookkeeping) without a reflash.
+ 	 */
+ 	if (flags & NOHZ_STATS_KICK)
+ 		WRITE_ONCE(nohz.next_blocked,
+-			   now + msecs_to_jiffies(4 * LOAD_AVG_PERIOD));
++			   now + msecs_to_jiffies(sysctl_sched_nohz_stats_ms));
+ 
+ abort:
+ 	/* There is still blocked load, enable periodic update */
+--- a/include/linux/sched/sysctl.h
++++ b/include/linux/sched/sysctl.h
+@@ -16,6 +16,13 @@
+ 
+ extern unsigned int sysctl_sched_child_runs_first;
+ 
++/*
++ * /proc/sys/kernel/sched_nohz_stats_ms - cadence (ms) at which the NOHZ
++ * idle load balancer refreshes idle CPUs' blocked load.  Lower = more
++ * frequent idle-CPU wakeups, higher = staler stats.
++ */
++extern unsigned int sysctl_sched_nohz_stats_ms;
++
+ enum sched_tunable_scaling {
+ 	SCHED_TUNABLESCALING_NONE,
+ 	SCHED_TUNABLESCALING_LOG,
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -1852,6 +1852,15 @@
+ 		.proc_handler	= sched_pelt_multiplier,
+ 	},
+ #endif
++	{
++		.procname	= "sched_nohz_stats_ms",
++		.data		= &sysctl_sched_nohz_stats_ms,
++		.maxlen		= sizeof(unsigned int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_INT_MAX,
++	},
+ #ifdef CONFIG_UCLAMP_TASK
+ 	{
+ 		.procname	= "sched_util_clamp_min",
