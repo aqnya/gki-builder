@@ -71,11 +71,23 @@ config:
   CONFIG_NET_SCH_FQ: y
   CONFIG_DEFAULT_FQ: y
   
-  CONFIG_CMDLINE: "stack_depot_disable=on kasan=off kvm-arm.mode=protected cgroup_disable=pressure noirqdebug rcupdate.rcu_expedited=0 kernel.panic_on_rcu_stall=0 rcu_nocbs=all"
+  # watchdog_thresh=60：softlockup 看门狗是 GKI 侧仅剩的、编译期可动的高频周期唤醒源。
+  # 默认 10 时每个 CPU 都挂一个 HRTIMER_MODE_REL_PINNED_HARD 的 watchdog hrtimer
+  # （sample_period = 2*thresh * 1/5 s），8 核合计约每秒数次；这正是"待机功耗边界"
+  # 笔记里说的"纯为调试的唤醒"。60 把周期拉长 6 倍（探测阈值从 20s 提到 120s，
+  # 仍在检测，只是报出更晚），且运行期 `echo 10 > /proc/sys/kernel/watchdog_thresh`
+  # 可随时改回——不刷机即可 A/B。因为 CONFIG_SOFTLOCKUP_DETECTOR 是布局红线
+  # （touch_softlockup_watchdog 是厂商模块依赖的导出符号），这里只能走 cmdline。
+  CONFIG_CMDLINE: "stack_depot_disable=on kasan=off kvm-arm.mode=protected cgroup_disable=pressure noirqdebug rcupdate.rcu_expedited=0 kernel.panic_on_rcu_stall=0 rcu_nocbs=all watchdog_thresh=60"
 
   CONFIG_CPU_IDLE_GOV_TEO: n
   CONFIG_CPU_IDLE_GOV_QCOM_LPM: y
   CONFIG_RCU_LAZY_DEFAULT_OFF: n
+  # WQ_WATCHDOG 的 wq_watchdog_timer_fn 是一个每 30s 触发一次的定时器（会遍历所有
+  # workqueue pool 查 stall），纯调试用。它只声明 wq_watchdog_touch() 这个 static
+  # inline 存根（include/linux/workqueue.h:659），不在任何 struct 定义里、不在
+  # abi-pinned-configs.txt、也不在 kmi-required-symbols.txt，关掉只少一次周期唤醒。
+  CONFIG_WQ_WATCHDOG: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
