@@ -98,6 +98,8 @@ config:
   # inline 存根（include/linux/workqueue.h:659），不在任何 struct 定义里、不在
   # abi-pinned-configs.txt、也不在 kmi-required-symbols.txt，关掉只少一次周期唤醒。
   CONFIG_WQ_WATCHDOG: n
+  CONFIG_ZRAM_DEF_COMP_LZ4: y
+  CONFIG_ZRAM_DEF_COMP_LZORLE: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
