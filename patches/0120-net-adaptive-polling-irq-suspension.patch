@@ -1,0 +1,459 @@
+# 网络自适应轮询（IRQ suspension / adaptive polling）回移到 5.15，保持 KMI 不变
+#
+# 上游来源：Linux 6.13 的 “suspend irqs during application busy periods” 系列
+#   (Martin Karsten / Joe Damato)，以及它所依赖的 Linux 6.9 per-epoll busy poll 系列。
+#
+#   eventpoll: support busy poll per epoll instance       85455c795c07
+#   eventpoll: Add per-epoll busy poll packet budget       c6aa2a7778d8
+#   eventpoll: Add per-epoll prefer busy poll option       de57a2510822
+#   eventpoll: Add epoll ioctl for epoll_params            18e2bf0edf4d
+#   net: Add napi_struct parameter irq_suspend_timeout     5dc51ec86df6
+#   net: Add control functions for irq suspension          3fcbecbdeb04
+#   eventpoll: Control irq suspension for prefer_busy_poll 8a6de2627fd3
+#
+# 与上游的差异（为满足“不改 KMI”）：
+#   * 上游把 irq_suspend_timeout 存进 struct napi_struct，并按 NAPI 粒度通过
+#     netdev-genl 配置。5.15 没有 netdev-genl，且改 struct napi_struct 会动
+#     KMI，所以这里退化为一个全局 sysctl：
+#         /proc/sys/net/core/irq_suspend_timeout   （单位 ns，0 = 关闭）
+#     语义不变：epoll 忙轮询持续拿到事件时不断顺延该定时器以挂起 IRQ，
+#     一旦某次 epoll_wait 没拿到事件就立即恢复 IRQ。
+#   * 该参数默认启用：sysctl_net_irq_suspend_timeout 初值 = 1000000（1ms）。
+#     要真正触发仍需用户态用 epoll 忙轮询并置 prefer_busy_poll（见下），
+#     所以默认值只会影响“已经选择忙轮询”的应用，不改变其它程序的收发路径。
+#   * napi_suspend_irqs()/napi_resume_irqs() 不 EXPORT_SYMBOL，厂商模块看不到，
+#     导出符号集合不变。因此这两函数只在内核内置路径（eventpoll）里可用。
+#   * 只新增 struct eventpoll 字段（fs/eventpoll.c 内部结构，不在任何头文件里），
+#     不触碰任何模块可见结构体布局（struct napi_struct / struct net_device 均未动）。
+#
+# 用法（用户态照常使用 EPIOCSPARAMS 开启 prefer_busy_poll）：
+#   struct epoll_params p = { .busy_poll_usecs = 50,
+#                             .busy_poll_budget = 64,
+#                             .prefer_busy_poll = 1 };
+#   ioctl(epfd, EPIOCSPARAMS, &p);
+#   # 运行时可调 / 关闭：echo 0 > /proc/sys/net/core/irq_suspend_timeout
+#
+diff --git a/fs/eventpoll.c b/fs/eventpoll.c
+index 2e29bada3..d37a2779b 100644
+--- a/fs/eventpoll.c
++++ b/fs/eventpoll.c
+@@ -8,6 +8,7 @@
+ 
+ #include <linux/init.h>
+ #include <linux/kernel.h>
++#include <linux/ioctl.h>
+ #include <linux/sched/signal.h>
+ #include <linux/fs.h>
+ #include <linux/file.h>
+@@ -38,6 +39,7 @@
+ #include <linux/seq_file.h>
+ #include <linux/compat.h>
+ #include <linux/rculist.h>
++#include <linux/capability.h>
+ #include <net/busy_poll.h>
+ 
+ /*
+@@ -232,6 +234,11 @@ struct eventpoll {
+ #ifdef CONFIG_NET_RX_BUSY_POLL
+ 	/* used to track busy poll napi_id */
+ 	unsigned int napi_id;
++	/* busy poll timeout */
++	u32 busy_poll_usecs;
++	/* busy poll packet budget */
++	u16 busy_poll_budget;
++	bool prefer_busy_poll;
+ #endif
+ 
+ #ifdef CONFIG_DEBUG_LOCK_ALLOC
+@@ -386,11 +393,41 @@ static inline int ep_events_available(struct eventpoll *ep)
+ }
+ 
+ #ifdef CONFIG_NET_RX_BUSY_POLL
++/**
++ * busy_loop_ep_timeout - check if busy poll has timed out. The timeout value
++ * from the epoll instance ep is preferred, but if it is not set fallback to
++ * the system-wide global via busy_loop_timeout.
++ *
++ * @start_time: The start time used to compute the remaining time until timeout.
++ * @ep: Pointer to the eventpoll context.
++ *
++ * Return: true if the timeout has expired, false otherwise.
++ */
++static bool busy_loop_ep_timeout(unsigned long start_time,
++				 struct eventpoll *ep)
++{
++	unsigned long bp_usec = READ_ONCE(ep->busy_poll_usecs);
++
++	if (bp_usec) {
++		unsigned long end_time = start_time + bp_usec;
++		unsigned long now = busy_loop_current_time();
++
++		return time_after(now, end_time);
++	} else {
++		return busy_loop_timeout(start_time);
++	}
++}
++
++static bool ep_busy_loop_on(struct eventpoll *ep)
++{
++	return !!ep->busy_poll_usecs || net_busy_loop_on();
++}
++
+ static bool ep_busy_loop_end(void *p, unsigned long start_time)
+ {
+ 	struct eventpoll *ep = p;
+ 
+-	return ep_events_available(ep) || busy_loop_timeout(start_time);
++	return ep_events_available(ep) || busy_loop_ep_timeout(start_time, ep);
+ }
+ 
+ /*
+@@ -402,10 +439,15 @@ static bool ep_busy_loop_end(void *p, unsigned long start_time)
+ static bool ep_busy_loop(struct eventpoll *ep, int nonblock)
+ {
+ 	unsigned int napi_id = READ_ONCE(ep->napi_id);
++	u16 budget = READ_ONCE(ep->busy_poll_budget);
++	bool prefer_busy_poll = READ_ONCE(ep->prefer_busy_poll);
+ 
+-	if ((napi_id >= MIN_NAPI_ID) && net_busy_loop_on()) {
+-		napi_busy_loop(napi_id, nonblock ? NULL : ep_busy_loop_end, ep, false,
+-			       BUSY_POLL_BUDGET);
++	if (!budget)
++		budget = BUSY_POLL_BUDGET;
++
++	if (napi_id >= MIN_NAPI_ID && ep_busy_loop_on(ep)) {
++		napi_busy_loop(napi_id, nonblock ? NULL : ep_busy_loop_end,
++			       ep, prefer_busy_poll, budget);
+ 		if (ep_events_available(ep))
+ 			return true;
+ 		/*
+@@ -413,6 +455,8 @@ static bool ep_busy_loop(struct eventpoll *ep, int nonblock)
+ 		 * it back in when we have moved a socket with a valid NAPI
+ 		 * ID onto the ready list.
+ 		 */
++		if (prefer_busy_poll)
++			napi_resume_irqs(napi_id);
+ 		ep->napi_id = 0;
+ 		return false;
+ 	}
+@@ -424,12 +468,12 @@ static bool ep_busy_loop(struct eventpoll *ep, int nonblock)
+  */
+ static inline void ep_set_busy_poll_napi_id(struct epitem *epi)
+ {
+-	struct eventpoll *ep;
++	struct eventpoll *ep = epi->ep;
+ 	unsigned int napi_id;
+ 	struct socket *sock;
+ 	struct sock *sk;
+ 
+-	if (!net_busy_loop_on())
++	if (!ep_busy_loop_on(ep))
+ 		return;
+ 
+ 	sock = sock_from_file(epi->ffd.file);
+@@ -441,7 +485,6 @@ static inline void ep_set_busy_poll_napi_id(struct epitem *epi)
+ 		return;
+ 
+ 	napi_id = READ_ONCE(sk->sk_napi_id);
+-	ep = epi->ep;
+ 
+ 	/* Non-NAPI IDs can be rejected
+ 	 *	or
+@@ -454,6 +497,65 @@ static inline void ep_set_busy_poll_napi_id(struct epitem *epi)
+ 	ep->napi_id = napi_id;
+ }
+ 
++static long ep_eventpoll_bp_ioctl(struct file *file, unsigned int cmd,
++				  unsigned long arg)
++{
++	struct eventpoll *ep = file->private_data;
++	void __user *uarg = (void __user *)arg;
++	struct epoll_params epoll_params;
++
++	switch (cmd) {
++	case EPIOCSPARAMS:
++		if (copy_from_user(&epoll_params, uarg, sizeof(epoll_params)))
++			return -EFAULT;
++
++		/* pad byte must be zero */
++		if (epoll_params.__pad)
++			return -EINVAL;
++
++		if (epoll_params.busy_poll_usecs > S32_MAX)
++			return -EINVAL;
++
++		if (epoll_params.prefer_busy_poll > 1)
++			return -EINVAL;
++
++		if (epoll_params.busy_poll_budget > NAPI_POLL_WEIGHT &&
++		    !capable(CAP_NET_ADMIN))
++			return -EPERM;
++
++		WRITE_ONCE(ep->busy_poll_usecs, epoll_params.busy_poll_usecs);
++		WRITE_ONCE(ep->busy_poll_budget, epoll_params.busy_poll_budget);
++		WRITE_ONCE(ep->prefer_busy_poll, epoll_params.prefer_busy_poll);
++		return 0;
++	case EPIOCGPARAMS:
++		memset(&epoll_params, 0, sizeof(epoll_params));
++		epoll_params.busy_poll_usecs = READ_ONCE(ep->busy_poll_usecs);
++		epoll_params.busy_poll_budget = READ_ONCE(ep->busy_poll_budget);
++		epoll_params.prefer_busy_poll = READ_ONCE(ep->prefer_busy_poll);
++		if (copy_to_user(uarg, &epoll_params, sizeof(epoll_params)))
++			return -EFAULT;
++		return 0;
++	default:
++		return -ENOIOCTLCMD;
++	}
++}
++
++static void ep_suspend_napi_irqs(struct eventpoll *ep)
++{
++	unsigned int napi_id = READ_ONCE(ep->napi_id);
++
++	if (napi_id >= MIN_NAPI_ID && READ_ONCE(ep->prefer_busy_poll))
++		napi_suspend_irqs(napi_id);
++}
++
++static void ep_resume_napi_irqs(struct eventpoll *ep)
++{
++	unsigned int napi_id = READ_ONCE(ep->napi_id);
++
++	if (napi_id >= MIN_NAPI_ID && READ_ONCE(ep->prefer_busy_poll))
++		napi_resume_irqs(napi_id);
++}
++
+ #else
+ 
+ static inline bool ep_busy_loop(struct eventpoll *ep, int nonblock)
+@@ -465,6 +567,20 @@ static inline void ep_set_busy_poll_napi_id(struct epitem *epi)
+ {
+ }
+ 
++static long ep_eventpoll_bp_ioctl(struct file *file, unsigned int cmd,
++				  unsigned long arg)
++{
++	return -EOPNOTSUPP;
++}
++
++static void ep_suspend_napi_irqs(struct eventpoll *ep)
++{
++}
++
++static void ep_resume_napi_irqs(struct eventpoll *ep)
++{
++}
++
+ #endif /* CONFIG_NET_RX_BUSY_POLL */
+ 
+ /*
+@@ -702,6 +818,7 @@ static bool ep_refcount_dec_and_test(struct eventpoll *ep)
+ 
+ static void ep_free(struct eventpoll *ep)
+ {
++	ep_resume_napi_irqs(ep);
+ 	mutex_destroy(&ep->mtx);
+ 	free_uid(ep->user);
+ 	wakeup_source_unregister(ep->ws);
+@@ -824,6 +941,27 @@ static void ep_clear_and_put(struct eventpoll *ep)
+ 		ep_free(ep);
+ }
+ 
++static long ep_eventpoll_ioctl(struct file *file, unsigned int cmd,
++			       unsigned long arg)
++{
++	int ret;
++
++	if (!is_file_epoll(file))
++		return -EINVAL;
++
++	switch (cmd) {
++	case EPIOCSPARAMS:
++	case EPIOCGPARAMS:
++		ret = ep_eventpoll_bp_ioctl(file, cmd, arg);
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++	return ret;
++}
++
+ static int ep_eventpoll_release(struct inode *inode, struct file *file)
+ {
+ 	struct eventpoll *ep = file->private_data;
+@@ -966,6 +1104,8 @@ static const struct file_operations eventpoll_fops = {
+ 	.release	= ep_eventpoll_release,
+ 	.poll		= ep_eventpoll_poll,
+ 	.llseek		= noop_llseek,
++	.unlocked_ioctl	= ep_eventpoll_ioctl,
++	.compat_ioctl   = compat_ptr_ioctl,
+ };
+ 
+ /*
+@@ -1908,8 +2048,11 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
+ 			 * trying again in search of more luck.
+ 			 */
+ 			res = ep_send_events(ep, events, maxevents);
+-			if (res)
++			if (res) {
++				if (res > 0)
++					ep_suspend_napi_irqs(ep);
+ 				return res;
++			}
+ 		}
+ 
+ 		if (timed_out)
+@@ -2137,6 +2280,11 @@ static int do_epoll_create(int flags)
+ 		error = PTR_ERR(file);
+ 		goto out_free_fd;
+ 	}
++#ifdef CONFIG_NET_RX_BUSY_POLL
++	ep->busy_poll_usecs = 0;
++	ep->busy_poll_budget = 0;
++	ep->prefer_busy_poll = false;
++#endif
+ 	ep->file = file;
+ 	fd_install(fd, file);
+ 	return fd;
+diff --git a/include/net/busy_poll.h b/include/net/busy_poll.h
+index 2c37aa0a4..2fae321ae 100644
+--- a/include/net/busy_poll.h
++++ b/include/net/busy_poll.h
+@@ -30,6 +30,7 @@
+ struct napi_struct;
+ extern unsigned int sysctl_net_busy_read __read_mostly;
+ extern unsigned int sysctl_net_busy_poll __read_mostly;
++extern unsigned int sysctl_net_irq_suspend_timeout __read_mostly;
+ 
+ static inline bool net_busy_loop_on(void)
+ {
+@@ -47,6 +48,9 @@ void napi_busy_loop(unsigned int napi_id,
+ 		    bool (*loop_end)(void *, unsigned long),
+ 		    void *loop_end_arg, bool prefer_busy_poll, u16 budget);
+ 
++void napi_suspend_irqs(unsigned int napi_id);
++void napi_resume_irqs(unsigned int napi_id);
++
+ #else /* CONFIG_NET_RX_BUSY_POLL */
+ static inline unsigned long net_busy_loop_on(void)
+ {
+@@ -58,6 +62,14 @@ static inline bool sk_can_busy_loop(struct sock *sk)
+ 	return false;
+ }
+ 
++static inline void napi_suspend_irqs(unsigned int napi_id)
++{
++}
++
++static inline void napi_resume_irqs(unsigned int napi_id)
++{
++}
++
+ #endif /* CONFIG_NET_RX_BUSY_POLL */
+ 
+ static inline unsigned long busy_loop_current_time(void)
+diff --git a/include/uapi/linux/eventpoll.h b/include/uapi/linux/eventpoll.h
+index e68765884..9f21212df 100644
+--- a/include/uapi/linux/eventpoll.h
++++ b/include/uapi/linux/eventpoll.h
+@@ -85,6 +85,19 @@ struct epoll_event {
+ 	__u64 data;
+ } EPOLL_PACKED;
+ 
++struct epoll_params {
++	__u32 busy_poll_usecs;
++	__u16 busy_poll_budget;
++	__u8 prefer_busy_poll;
++
++	/* pad the struct to a multiple of 64bits */
++	__u8 __pad;
++};
++
++#define EPOLL_IOC_TYPE 0x8A
++#define EPIOCSPARAMS _IOW(EPOLL_IOC_TYPE, 0x01, struct epoll_params)
++#define EPIOCGPARAMS _IOR(EPOLL_IOC_TYPE, 0x02, struct epoll_params)
++
+ #ifdef CONFIG_PM_SLEEP
+ static inline void ep_take_care_of_epollwakeup(struct epoll_event *epev)
+ {
+diff --git a/net/core/dev.c b/net/core/dev.c
+index 799398a1c..2209bea60 100644
+--- a/net/core/dev.c
++++ b/net/core/dev.c
+@@ -6876,6 +6876,43 @@ void napi_busy_loop(unsigned int napi_id,
+ }
+ EXPORT_SYMBOL(napi_busy_loop);
+ 
++void napi_suspend_irqs(unsigned int napi_id)
++{
++	struct napi_struct *napi;
++
++	rcu_read_lock();
++	napi = napi_by_id(napi_id);
++	if (napi) {
++		unsigned long timeout = READ_ONCE(sysctl_net_irq_suspend_timeout);
++
++		if (timeout)
++			hrtimer_start(&napi->timer, ns_to_ktime(timeout),
++				      HRTIMER_MODE_REL_PINNED);
++	}
++	rcu_read_unlock();
++}
++
++void napi_resume_irqs(unsigned int napi_id)
++{
++	struct napi_struct *napi;
++
++	rcu_read_lock();
++	napi = napi_by_id(napi_id);
++	if (napi) {
++		/* If the timeout is cleared between the call to
++		 * napi_suspend_irqs and now, the timer armed with the original
++		 * value still determines the safety timeout as intended and
++		 * napi_watchdog will resume irq processing.
++		 */
++		if (READ_ONCE(sysctl_net_irq_suspend_timeout)) {
++			local_bh_disable();
++			napi_schedule(napi);
++			local_bh_enable();
++		}
++	}
++	rcu_read_unlock();
++}
++
+ #endif /* CONFIG_NET_RX_BUSY_POLL */
+ 
+ static void napi_hash_add(struct napi_struct *napi)
+diff --git a/net/core/sysctl_net_core.c b/net/core/sysctl_net_core.c
+index 60ea97aae..1f75ce421 100644
+--- a/net/core/sysctl_net_core.c
++++ b/net/core/sysctl_net_core.c
+@@ -504,6 +504,14 @@ static struct ctl_table net_core_table[] = {
+ 		.proc_handler	= proc_dointvec_minmax,
+ 		.extra1		= SYSCTL_ZERO,
+ 	},
++	{
++		.procname	= "irq_suspend_timeout",
++		.data		= &sysctl_net_irq_suspend_timeout,
++		.maxlen		= sizeof(unsigned int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++	},
+ #endif
+ #ifdef CONFIG_NET_SCHED
+ 	{
+diff --git a/net/socket.c b/net/socket.c
+index 315c6f397..2c5aac87d 100644
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -109,6 +109,8 @@
+ #ifdef CONFIG_NET_RX_BUSY_POLL
+ unsigned int sysctl_net_busy_read __read_mostly;
+ unsigned int sysctl_net_busy_poll __read_mostly;
++/* IRQ suspension safety timeout, in ns; default on for 1ms. */
++unsigned int sysctl_net_irq_suspend_timeout __read_mostly = 1000000;
+ #endif
+ 
+ static ssize_t sock_read_iter(struct kiocb *iocb, struct iov_iter *to);
