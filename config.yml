@@ -3,18 +3,26 @@
 # 改这里 + 推送到 main（或在 Actions 页面手动 Run workflow）就会触发编译。
 # 触发路径过滤见 .github/workflows/build.yml 的 on.push.paths。
 
+# 自己维护的 kernel/common（你的 fork）。不再从 Google 的 manifest 拉 kernel/common，
+# 而是在 repo 工作区里用 local manifest 把 path=common 替换成这个仓库。
 kernel:
-  # Android 内核 manifest 仓库 —— 源码用 `repo init/sync` 拉取，这里给 repo init -u
-  repo: https://android.googlesource.com/kernel/manifest
-  # manifest 分支。注意：**这里带 common- 前缀，kernel/common 的分支名不带**。
-  #   kernel/manifest -> common-android13-5.15      （repo init -b 用这个）
-  #   kernel/common   -> android13-5.15             （manifest 里 project 的 revision）
-  # 其它可选：common-android14-5.15 / common-android14-6.1 / common-android15-6.6 ...
-  branch: common-android13-5.15
-  # 指定编译的 commit —— 唯一来源就在这里，钉的是 kernel/common 的 SHA。
-  #   留空 ""          -> 用 manifest 给出的 revision（分支 tip）
+  repo: https://github.com/aqnya/android13-5.15-vermeer
+  # 你的 fork 的分支名（不是 Google manifest 的 common-xxx）。
+  branch: main
+  # 指定编译的 commit —— 唯一来源就在这里，钉的是这个 fork 的 SHA。
+  #   留空 ""          -> 用 branch 的 tip
   #   填 40 位 SHA     -> 精确钉死（推荐，保证可复现）
   commit: ""
+
+# Google 的 kernel manifest：**只用来拉 prebuilts / 构建工具**
+# （clang、build-tools、kernel-build-tools、kernel/configs），版本与内核树配套。
+# kernel/common 已经被上面的 kernel.repo 替换，manifest 里那份会被 local manifest 移除。
+manifest:
+  repo: https://android.googlesource.com/kernel/manifest
+  # 注意：**这里带 common- 前缀，你自己的 kernel 分支名通常不带**。
+  #   kernel/manifest -> common-android13-5.15
+  # 其它可选：common-android14-5.15 / common-android14-6.1 / common-android15-6.6 ...
+  branch: common-android13-5.15
 
 # 生成 .config 用的 defconfig 目标
 defconfig: gki_defconfig

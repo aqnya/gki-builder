@@ -1,5 +1,11 @@
 # patches/
 
+> **本目录默认已清空。** 内核改动现在直接提交到 `config.yml` 里 `kernel.repo`
+> 指向的自己维护的 fork，不再以补丁形式放在这里；CI 遇到 0 个补丁会直接跳过
+> （`scripts/build.sh` 的 `apply_patches`）。
+>
+> 下面保留原补丁工作流的说明，以及 KMI / ABI 布局护栏文档（护栏与补丁无关，仍然生效）。
+
 把内核补丁放到这里，CI 会在编译前按**文件名字典序**依次应用到内核源码树的
 **`common/`** 目录（也就是 `kernel/common`，repo 同步后的工作区路径）。
 

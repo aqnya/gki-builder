@@ -6,6 +6,7 @@
 | 你想做的事 | 改哪里 |
 |---|---|
 | 开关内核 config | [`config.yml`](config.yml) 的 `config:` |
+| 换自己维护的 kernel/common | [`config.yml`](config.yml) 的 `kernel:` |
 | 指定编译哪个 commit | [`config.yml`](config.yml) 的 `kernel.commit` |
 | 加补丁 | 丢进 [`patches/`](patches/) |
 | 改刷机包（设备名 / BLOCK / 打包内容） | [`ak3/`](ak3/) 里的 AnyKernel3 模板 |
@@ -34,35 +35,45 @@ config:
 因为 Kconfig 会静默丢弃依赖不满足的符号，最后一步会把「想要的」和「实际得到的」
 逐条比对，**有差异就让构建失败并列出差清单**，不会悄悄降级。
 
-### 2. 指定编译的 commit
+### 2. 指定 kernel/common 与编译 commit
+
+`kernel/common` 由自己维护（你的 fork），不再从 Google 拉：
 
 ```yaml
 kernel:
-  branch: common-android13-5.15
-  commit: ""            # 留空 = manifest 给出的 revision（分支 tip）
+  repo: https://github.com/aqnya/android13-5.15-vermeer
+  branch: main
+  commit: ""            # 留空 = branch 的 tip
   # commit: "77804d3596695c7b85fe038c81d9580283ffd2ca"   # 精确钉死
 ```
 
-`commit` 是唯一的 commit 来源（40 位 SHA，或留空）。钉住的是 **`kernel/common` 的 SHA**。
+prebuilts（clang、build-tools）仍从 Google 的 manifest 拉，单独配置：
 
-实现方式是 `repo init` 之后写一个 local manifest，把 `kernel/common` 的 revision
-换成你给的 SHA，再 `repo sync`；同步后还会校验一次 `git rev-parse HEAD` 是否吻合。
+```yaml
+manifest:
+  repo: https://android.googlesource.com/kernel/manifest
+  branch: common-android13-5.15   # 注意带 common- 前缀
+```
+
+`commit` 是唯一的 commit 来源（40 位 SHA，或留空）。钉住的是**你这个 fork 的 SHA**。
+
+实现方式是 `repo init` 之后写一个 local manifest，先
+`<remove-project name="kernel/common"/>`，再把自己仓库挂到 `path=common`，然后 `repo sync`；
+同步后还会校验一次 `git rev-parse HEAD` 是否吻合。
 
 填 SHA 能保证可复现，也避免分支 tip 漂移导致 vermagic 对不上、vendor 模块加载失败。
-查当前 tip：
+查你自己 fork 的 tip：
 
 ```bash
-git ls-remote https://android.googlesource.com/kernel/common refs/heads/android13-5.15
+git ls-remote https://github.com/aqnya/android13-5.15-vermeer refs/heads/main
 ```
 
 > ⚠️ **两套分支名，前缀规则相反，别搞混：**
 >
-> | 用在哪 | 分支名 | 例 |
+> | 配置项 | 分支名 | 例 |
 > |---|---|---|
-> | `repo init -b`（`kernel/manifest`） | **带** `common-` 前缀 | `common-android13-5.15` |
-> | `kernel/common` 的 project revision | **不带**前缀 | `android13-5.15` |
->
-> `config.yml` 里 `kernel.repo` / `kernel.branch` 填的是 **manifest** 那一套。
+> | `kernel.branch`（你自己的 fork） | 通常**不带**前缀 | `main` |
+> | `manifest.branch`（Google manifest） | **带** `common-` 前缀 | `common-android13-5.15` |
 
 ### 3. 放补丁
 
@@ -104,10 +115,14 @@ split_boot; flash_boot;      # ramdisk 在 init_boot：只换 Image，绝不碰 
 
 ## 源码怎么来的
 
-用 `repo` 而不是裸 `git clone`：
+用 `repo` 而不是裸 `git clone`：Google manifest 负责把 prebuilts 拉到位，
+`kernel/common` 则由 local manifest 指向你自己维护的 fork：
 
 ```bash
 repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15
+# .repo/local_manifests/kernel-common.xml:
+#   <remove-project name="kernel/common"/>
+#   <project path="common" name="android13-5.15-vermeer" remote="self" revision="main"/>
 repo sync common build/kernel prebuilts/clang/host/linux-x86 ...
 ```
 
@@ -131,14 +146,15 @@ sync:
 
 ## 支持的 manifest 分支
 
-`config.yml` 里 `kernel.branch` 可换（`kernel/manifest` 的真实分支）：
+`config.yml` 里 `manifest.branch` 可换（Google `kernel/manifest` 的真实分支），
+换它就用对应版本的 prebuilts；`kernel.repo` / `kernel.branch` 指向你自己维护的对应内核：
 
-| manifest 分支 | 内核 | kernel/common 分支 |
-|---|---|---|
-| `common-android13-5.15` | 5.15 | `android13-5.15` |
-| `common-android14-5.15` | 5.15 | `android14-5.15` |
-| `common-android14-6.1` | 6.1 | `android14-6.1` |
-| `common-android15-6.6` | 6.6 | `android15-6.6` |
+| manifest 分支 | 内核 |
+|---|---|
+| `common-android13-5.15` | 5.15 |
+| `common-android14-5.15` | 5.15 |
+| `common-android14-6.1` | 6.1 |
+| `common-android15-6.6` | 6.6 |
 
 还有带日期的快照分支（`common-android13-5.15-2023-01` 这类），manifest 里每个 project
 都钉了 SHA，适合要和某个时间点完全对齐的场景。
@@ -160,7 +176,8 @@ bash -n scripts/build.sh                                   # 语法检查
 ```
 
 `scripts/build.sh` 也可以在本地跑完整流程，需要 git / make / curl / python3(PyYAML)，
-会自动下载 `repo` 工具，并且要拉得动 `android.googlesource.com`。
+会自动下载 `repo` 工具，并且要拉得动 `android.googlesource.com`（prebuilts）和
+你自己 `kernel.repo` 指向的仓库。
 
 ## 工作原理
 
@@ -168,8 +185,8 @@ bash -n scripts/build.sh                                   # 语法检查
 config.yml ──► parse_config.py ──► 校验 ──► build.sh
                                                 │
    1. 装 repo 工具                              │
-   2. repo init -u <manifest> -b <branch> ◄─────┘
-      ├─ 有 commit 就写 local_manifests/pin-kernel-common.xml
+   2. repo init -u <manifest.repo> -b <manifest.branch> ◄─┘
+      ├─ 写 local_manifests/kernel-common.xml：common 换成自己的 fork
       └─ repo sync（只拉需要的项目）
    3. 读 CLANG_VERSION，清掉用不到的历史 clang 版本省磁盘
    4. patches/*.patch 按序 git apply --check 后应用到 common/

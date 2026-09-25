@@ -70,17 +70,21 @@ jobs:
             echo "kernel_repo=${KERNEL_REPO}"
             echo "kernel_branch=${KERNEL_BRANCH}"
             echo "kernel_commit=${KERNEL_COMMIT}"
+            echo "manifest_branch=${MANIFEST_BRANCH}"
           } >> "$GITHUB_OUTPUT"
 
           {
             echo "KERNEL_REPO=${KERNEL_REPO}"
             echo "KERNEL_BRANCH=${KERNEL_BRANCH}"
             echo "KERNEL_COMMIT=${KERNEL_COMMIT}"
+            echo "MANIFEST_REPO=${MANIFEST_REPO}"
+            echo "MANIFEST_BRANCH=${MANIFEST_BRANCH}"
             echo "TOOLCHAIN_CLANG_VERSION=${TOOLCHAIN_CLANG_VERSION}"
             echo "SYNC_PROJECTS=${SYNC_PROJECTS}"
           } >> "$GITHUB_ENV"
 
-          echo "manifest: ${KERNEL_BRANCH}  commit: ${KERNEL_COMMIT:-'(manifest 给出的 revision)'}"
+          echo "kernel: ${KERNEL_REPO} @ ${KERNEL_BRANCH}  commit: ${KERNEL_COMMIT:-'(branch tip)'}"
+          echo "prebuilts manifest: ${MANIFEST_BRANCH}"
 
       # repo 每次都要重新 clone，缓存 git 对象目录能让后续 sync 明显变快。
       # 命中失败只是变慢，不会用错内容。
@@ -88,9 +92,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .work/src/.repo/project-objects
-          key: repo-objects-${{ steps.cfg.outputs.kernel_branch }}-${{ github.run_id }}
+          key: repo-objects-${{ steps.cfg.outputs.manifest_branch }}-${{ github.run_id }}
           restore-keys: |
-            repo-objects-${{ steps.cfg.outputs.kernel_branch }}-
+            repo-objects-${{ steps.cfg.outputs.manifest_branch }}-
       # lz4 用于产出 Image.lz4（Image.gz 只依赖 gzip，始终会有）
       - name: install build tools and dep
         run: |
@@ -103,7 +107,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: gki-${{ steps.cfg.outputs.kernel_branch }}-${{ github.run_number }}
+          name: gki-${{ steps.cfg.outputs.manifest_branch }}-${{ github.run_number }}
           path: |
             dist/Image
             dist/Image.gz

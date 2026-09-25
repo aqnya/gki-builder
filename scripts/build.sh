@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # gki-builder 编译主流程：
-#   repo init/sync 拉源码 -> 打补丁 -> 生成 .config -> make Image -> 打包
+#   repo init/sync 拉 prebuilts -> 用 local manifest 挂自己维护的 kernel/common
+#   -> 打补丁 -> 生成 .config -> make Image -> 打包
 #
-# 源码走 Android 官方的 repo 工具（manifest 里已包含所需的 clang 与构建工具），
+# prebuilts（clang / build-tools）仍走 Google 的 kernel manifest；
+# kernel/common 不在 Google 同步，改用 config.yml 里 kernel.repo 指定的自己 fork。
 # 所有可调项都在 config.yml；本脚本只负责执行。
 set -euo pipefail
 
@@ -71,9 +73,17 @@ ensure_repo() {
   command -v repo >/dev/null || die "repo 安装后仍不可用"
 }
 
+# 把 git 仓库地址拆成 repo local-manifest 需要的 remote fetch 基址 + 项目名。
+#   https://github.com/aqnya/foo.git -> fetch=https://github.com/aqnya  name=foo
+#   git@github.com:aqnya/foo.git     -> fetch=git@github.com:aqnya      name=foo
+repo_url_fetch() { local u="${1%/}"; printf '%s\n' "${u%/*}"; }
+repo_url_name()  { local u="${1%/}"; u="${u##*/}"; printf '%s\n' "${u%.git}"; }
+
 # -------------------------------------------------------- 1. repo 同步源码
+# prebuilts 走 Google manifest；kernel/common 用 local manifest 换成自己的 fork。
 sync_source() {
-  info "repo 同步：$KERNEL_REPO @ $KERNEL_BRANCH"
+  info "repo 同步 prebuilts：$MANIFEST_REPO @ $MANIFEST_BRANCH"
+  info "kernel/common 来源：$KERNEL_REPO @ ${KERNEL_COMMIT:-$KERNEL_BRANCH}"
   mkdir -p "$SRC"
 
   # repo 会在很多子目录里跑 git，先放开所有权检查
@@ -83,25 +93,29 @@ sync_source() {
 
   (
     cd "$SRC"
-    repo init -u "$KERNEL_REPO" -b "$KERNEL_BRANCH" \
+    repo init -u "$MANIFEST_REPO" -b "$MANIFEST_BRANCH" \
       --no-clone-bundle --quiet --depth=1 \
-      || die "repo init 失败（检查 kernel.repo / kernel.branch）"
+      || die "repo init 失败（检查 manifest.repo / manifest.branch）"
 
-    local pin="$SRC/.repo/local_manifests/pin-kernel-common.xml"
+    # local manifest：移除 Google 的 kernel/common，改成自己维护的 fork。
+    # remote 的 fetch 取仓库地址去掉最后一段，project name 取最后一段（去 .git）；
+    # revision 用 commit（钉死）或 branch。
+    local self_fetch self_name rev
+    self_fetch="$(repo_url_fetch "$KERNEL_REPO")"
+    self_name="$(repo_url_name "$KERNEL_REPO")"
+    rev="${KERNEL_COMMIT:-$KERNEL_BRANCH}"
+    note "kernel/common -> $self_fetch/$self_name @ $rev"
+
+    local pin="$SRC/.repo/local_manifests/kernel-common.xml"
     mkdir -p "$SRC/.repo/local_manifests"
-    if [[ -n "$KERNEL_COMMIT" ]]; then
-      note "钉死 kernel/common -> $KERNEL_COMMIT"
-      cat > "$pin" <<XML
+    cat > "$pin" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
+  <remote name="self" fetch="$self_fetch"/>
   <remove-project name="kernel/common"/>
-  <project path="common" name="kernel/common" revision="$KERNEL_COMMIT"/>
+  <project path="common" name="$self_name" remote="self" revision="$rev"/>
 </manifest>
 XML
-    else
-      note "未指定 commit，使用 manifest 给出的 revision"
-      rm -f "$pin"
-    fi
 
     info "repo sync（${#PROJECTS[@]} 个项目）"
     repo sync --no-clone-bundle --prune -j"$(nproc)" "${PROJECTS[@]}" \
@@ -127,7 +141,8 @@ XML
   KERNEL_SHA="$(git -C "$KERNEL_SRC" rev-parse HEAD)"
   info "kernel/common HEAD = $KERNEL_SHA"
   summary_lines+=("| 内核 commit | \`$KERNEL_SHA\` |")
-  summary_lines+=("| manifest 分支 | \`$KERNEL_BRANCH\` |")
+  summary_lines+=("| 内核源 | \`$KERNEL_REPO @ ${KERNEL_COMMIT:-$KERNEL_BRANCH}\` |")
+  summary_lines+=("| prebuilts manifest | \`$MANIFEST_BRANCH\` |")
 }
 
 # ------------------------------------------------------------ 2. 工具链

@@ -105,11 +105,16 @@ def _normalize_value(symbol: str, raw: object) -> str:
     )
 
 
+GIT_URL_RE = re.compile(r"^(?:https?|git|ssh)://|^[^/@]+@[^:/]+:")
+
+
 class Config:
     __slots__ = (
         "repo",
         "branch",
         "commit",
+        "manifest_repo",
+        "manifest_branch",
         "defconfig",
         "arch",
         "clang_version",
@@ -126,7 +131,7 @@ def parse(path: str) -> Config:
 
     kernel = _mapping(top, "kernel")
     cfg.repo = _str(kernel, "repo", "kernel", required=True)
-    if not re.match(r"^(?:https?|git|ssh)://|^[^/@]+@[^:/]+:", cfg.repo):
+    if not GIT_URL_RE.match(cfg.repo):
         raise ConfigError(f"'kernel.repo' 看起来不是 git 地址：{cfg.repo}")
 
     cfg.branch = _str(kernel, "branch", "kernel", required=True)
@@ -138,6 +143,15 @@ def parse(path: str) -> Config:
         raise ConfigError(
             f"'kernel.commit' 必须是 40 位十六进制 SHA 或留空，实际是 {cfg.commit!r}"
         )
+
+    manifest = _mapping(top, "manifest")
+    cfg.manifest_repo = _str(manifest, "repo", "manifest", required=True)
+    if not GIT_URL_RE.match(cfg.manifest_repo):
+        raise ConfigError(f"'manifest.repo' 看起来不是 git 地址：{cfg.manifest_repo}")
+
+    cfg.manifest_branch = _str(manifest, "branch", "manifest", required=True)
+    if any(ch.isspace() for ch in cfg.manifest_branch):
+        raise ConfigError(f"'manifest.branch' 不能包含空白：{cfg.manifest_branch!r}")
 
     cfg.defconfig = _str(top, "defconfig", "top", required=True)
     cfg.arch = _str(top, "arch", "top", required=True)
@@ -187,6 +201,8 @@ def emit_shell(cfg: Config) -> None:
         "KERNEL_REPO": cfg.repo,
         "KERNEL_BRANCH": cfg.branch,
         "KERNEL_COMMIT": cfg.commit,
+        "MANIFEST_REPO": cfg.manifest_repo,
+        "MANIFEST_BRANCH": cfg.manifest_branch,
         "DEFCONFIG": cfg.defconfig,
         "ARCH": cfg.arch,
         "TOOLCHAIN_CLANG_VERSION": cfg.clang_version,
