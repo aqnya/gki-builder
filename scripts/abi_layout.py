@@ -145,7 +145,7 @@ def _parse_types(blob: bytes) -> dict:
         end = strs.index(b"\0", off)
         return strs[off:end].decode("utf-8", "replace")
 
-    out: dict = {}
+    recs: list = []
     pos = 0
     tid = 1
     while pos < len(types):
@@ -167,17 +167,50 @@ def _parse_types(blob: bytes) -> dict:
         if pos + extra > len(types):
             raise BtfError("类型段长度对不上")
 
+        rec = {"id": tid, "name": s(name_off), "kind": kind,
+               "size": size_or_type, "members": []}
         if kind in (KIND_STRUCT, KIND_UNION):
-            members = []
             for m in range(vlen):
-                m_name, _m_type, m_off = struct.unpack_from("<III", types, pos + m * stride)
+                m_name, m_type, m_off = struct.unpack_from("<III", types, pos + m * stride)
                 bit_off = (m_off & 0xFFFFFF) if kind_flag else m_off
                 bit_size = (m_off >> 24) if kind_flag else None
-                members.append((s(m_name), bit_off, bit_size))
-            out.setdefault(s(name_off), {"size": size_or_type, "kind": kind,
-                                         "members": members, "id": tid})
+                rec["members"].append((s(m_name), bit_off, bit_size, m_type))
+        recs.append(rec)
         pos += extra
         tid += 1
+
+    by_id = {r["id"]: r for r in recs}
+
+    def _wraps_kabi_reserve(type_id: int, seen: set) -> bool:
+        """该匿名 struct/union 内部是否包裹了 ANDROID_KABI_RESERVE 字段。"""
+        r = by_id.get(type_id)
+        if not r or r["kind"] not in (KIND_STRUCT, KIND_UNION) or type_id in seen:
+            return False
+        seen.add(type_id)
+        for nm, _bo, _bs, mt in r["members"]:
+            if nm.startswith("android_kabi_reserved"):
+                return True
+            if _wraps_kabi_reserve(mt, seen):
+                return True
+        return False
+
+    def _is_kabi_slot(nm: str, type_id: int) -> bool:
+        # 顶层 reserve；或 ANDROID_KABI_USE()/REPLACE 生成的、包裹了 reserve
+        # 的匿名 union/struct。二者二进制偏移与大小完全相同，视为同一 ABI 槽位。
+        return nm.startswith("android_kabi_reserved") or \
+            (nm == "" and _wraps_kabi_reserve(type_id, set()))
+
+    out: dict = {}
+    for r in recs:
+        if r["kind"] not in (KIND_STRUCT, KIND_UNION):
+            continue
+        members = []
+        for nm, bo, bs, mt in r["members"]:
+            if _is_kabi_slot(nm, mt):
+                continue
+            members.append((nm, bo, bs))
+        out.setdefault(r["name"], {"size": r["size"], "kind": r["kind"],
+                                   "members": members, "id": r["id"]})
     return out
 
 
