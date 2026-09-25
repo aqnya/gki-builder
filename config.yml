@@ -100,6 +100,11 @@ config:
   CONFIG_WQ_WATCHDOG: n
   CONFIG_ZRAM_DEF_COMP_LZ4: y
   CONFIG_ZRAM_DEF_COMP_LZORLE: n
+  # 多级压缩流 + 重压缩（回移自 6.2）。主算法 lz4，二级用 zstd
+  # （CONFIG_CRYPTO_ZSTD 已在 gki_defconfig=y）：
+  #   echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm
+  #   echo "type=idle"           > /sys/block/zram0/recompress
+  CONFIG_ZRAM_MULTI_COMP: y
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
