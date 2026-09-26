@@ -1,28 +1,3 @@
-# KMI 护栏名单 —— 这台设备上「内核必须导出」的符号
-#
-# 来源：Xiaomi vermeer / HyperOS OS3.0.307.0.WNKCNM (Android 13) 的
-#       /vendor/lib/modules/*.ko 共 293 个厂商模块
-#       1) 用 scripts/kmi_extract.py 解析每个 .ko 的未定义符号 + __versions 表
-#          → 3624 个导入符号
-#       2) 再与设备 /proc/kallsyms 中「非模块」（即内核自带）的符号取交集
-#          → 排除 1271 个由其它模块互相提供的，以及 24 个解析噪声
-#          → 剩 2329 个 = 本文件
-#
-# 用法：build.sh 的 check_kmi 步骤会拿 ./vmlinux 的导出符号（__ksymtab_strings 段）
-#       与这份名单比对，缺任何一个就 FAIL —— 因为缺了就会有模块加载失败 → 不开机。
-#
-# 已经被这个名单拦下的改动（实测会不开机）：
-#   CONFIG_KASAN / KASAN_HW_TAGS=n        → 丢 kasan_flag_enabled（15 个模块要它，含 qce50_dlkm）
-#   CONFIG_DEBUG_LIST=n                   → 丢 __list_add_valid/__list_del_entry_valid
-#   CONFIG_SOFTLOCKUP_DETECTOR=n          → 丢 touch_softlockup_watchdog
-#   改抢占模型（PREEMPT_NONE / 无 PREEMPT_COUNT）→ 丢 preempt_schedule(_notrace)
-#   CONFIG_CFI_CLANG=n                    → 丢 __ubsan_handle_cfi_check_fail_abort（293 个模块全要）
-#
-# ROM 或厂商模块升级后重新生成（需要 adb/root）：
-#   su -c 'cp /vendor/lib/modules/*.ko /data/local/tmp/mods/ && chmod -R a+rX /data/local/tmp/mods'
-#   su -c 'cat /proc/kallsyms' > kallsyms.txt
-#   python3 scripts/kmi_extract.py /data/local/tmp/mods --kallsyms kallsyms.txt \
-#       -o scripts/kmi-required-symbols.txt
 PDE_DATA
 ___pskb_trim
 ___ratelimit
