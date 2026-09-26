@@ -16,13 +16,13 @@ export GIT_TERMINAL_PROMPT=0
 
 # repo sync 默认只拉 make 路线需要的项目（省磁盘/时间）。
 # 要更多项目（如 virtual-device）在 config.yml 的 sync.projects 里加。
+# 注意：Android17-6.18 的 manifest 已经没有 kernel/configs 项目，故默认集合里不再包含它。
 DEFAULT_SYNC_PROJECTS=(
   common
   build/kernel
   prebuilts/clang/host/linux-x86
   prebuilts/build-tools
   prebuilts/kernel-build-tools
-  kernel/configs
 )
 
 die() { echo "::error::$*" >&2; exit 1; }
@@ -179,17 +179,33 @@ resolve_clang_version() {
 }
 
 # 把 repo 工作区里的工具放进 PATH（版本来自 build.config.common 的约定）
+#
+# Android17-6.18 的 manifest 换了主机工具布局：老的 build/kernel/build-tools/path/linux-x86
+# 已经没有了。新布局里 pahole/dtc 这类内置工具挪到
+# prebuilts/kernel-build-tools/linux_musl-x86/bin；bison/flex/bc 这些交给系统包（CI 里 apt 装），
+# 不再从 prebuilts/build-tools/linux-x86/bin 取（那份需要额外设 BISON_PKGDATADIR 才跑得动）。
+# 这里把新旧目录都列上，不存在的自动跳过。数组按「低优先级 -> 高优先级」排列，逐个 prepend。
 setup_path() {
-  local p
-  for p in \
-    "$CLANG_BIN" \
-    "$SRC/build/kernel/build-tools/path/linux-x86" \
-    "$SRC/prebuilts/build-tools/path/linux-x86" \
+  local dirs=(
+    "$SRC/prebuilts/build-tools/path/linux-x86"
     "$SRC/prebuilts/kernel-build-tools"
-  do
+    "$SRC/build/kernel/build-tools/path/linux-x86"
+    "$SRC/prebuilts/kernel-build-tools/linux_musl-x86/bin"
+    "$CLANG_BIN"
+  )
+  local p
+  for p in "${dirs[@]}"; do
     [[ -d "$p" ]] && export PATH="$p:$PATH"
   done
   command -v clang >/dev/null || die "PATH 中没有 clang（$CLANG_BIN）"
+
+  # kconfig 需要 bison/flex；CONFIG_DEBUG_INFO_BTF=y 需要 pahole（见 gki_defconfig）。
+  # 缺了会拖到编译中段才报错，这里提前点出来。
+  local t missing=()
+  for t in bison flex pahole; do
+    command -v "$t" >/dev/null || missing+=("$t")
+  done
+  (( ${#missing[@]} == 0 )) || note "警告：PATH 中缺少 ${missing[*]}（内核编译可能失败）"
 }
 
 # ------------------------------------------------------------ 3. 打补丁

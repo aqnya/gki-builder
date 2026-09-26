@@ -95,11 +95,12 @@ jobs:
           key: repo-objects-${{ steps.cfg.outputs.manifest_branch }}-${{ github.run_id }}
           restore-keys: |
             repo-objects-${{ steps.cfg.outputs.manifest_branch }}-
-      # lz4 用于产出 Image.lz4（Image.gz 只依赖 gzip，始终会有）
+      # lz4 用于产出 Image.lz4（Image.gz 只依赖 gzip，始终会有）；
+      # bc/bison/flex 主要走 prebuilts，这里装一份做兜底（PATH 里 prebuilts 优先）。
       - name: install build tools and dep
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libelf-dev lz4
+          sudo apt-get install -y libelf-dev lz4 bc bison flex
 
       - name: Build
         run: bash scripts/build.sh

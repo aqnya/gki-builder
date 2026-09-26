@@ -15,23 +15,28 @@ kernel:
   commit: ""
 
 # Google 的 kernel manifest：**只用来拉 prebuilts / 构建工具**
-# （clang、build-tools、kernel-build-tools、kernel/configs），版本与内核树配套。
+# （clang、build-tools、kernel-build-tools），版本与内核树配套。
 # kernel/common 已经被上面的 kernel.repo 替换，manifest 里那份会被 local manifest 移除。
+#
+# 这里选 Android17-6.18（clang r584948c），比内核树自带的 r450784e 新。
+# 注意：Android17 的 manifest 已经没有 kernel/configs 项目了，默认 sync 集合里对应项已去掉。
 manifest:
   repo: https://android.googlesource.com/kernel/manifest
   # 注意：**这里带 common- 前缀，你自己的 kernel 分支名通常不带**。
-  #   kernel/manifest -> common-android13-5.15
-  # 其它可选：common-android14-5.15 / common-android14-6.1 / common-android15-6.6 ...
-  branch: common-android13-5.15
+  #   kernel/manifest -> common-android17-6.18
+  # 其它可选：common-android14-5.15 / common-android15-6.6 / common-android16-6.12 ...
+  branch: common-android17-6.18
 
 # 生成 .config 用的 defconfig 目标
 defconfig: gki_defconfig
 arch: arm64
 
 toolchain:
-  # CLANG_VERSION 默认从内核树 common/build.config.constants 自动读取。
-  # android13-5.15 / common-android13-5.15 对应 r450784e。留空 = 自动；填了则覆盖。
-  clang_version: ""
+  # CLANG_VERSION 默认从内核树 common/build.config.constants 自动读取（5.15 fork 里是
+  # r450784e）。但 manifest 换到 Android17-6.18 后，prebuilts 里只有 r547379 / r584948*
+  # / r596125，没有 r450784e，自动读取会找不到导致构建失败 —— 所以这里显式钉成
+  # Android17-6.18 的 r584948c。留空 = 自动；填了则覆盖。
+  clang_version: r584948c
 
 sync:
   # repo sync 拉哪些项目。留空 = 用默认集合（内核源码 + make 需要的工具链/构建工具），

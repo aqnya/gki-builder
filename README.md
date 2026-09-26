@@ -52,8 +52,13 @@ prebuilts（clang、build-tools）仍从 Google 的 manifest 拉，单独配置�
 ```yaml
 manifest:
   repo: https://android.googlesource.com/kernel/manifest
-  branch: common-android13-5.15   # 注意带 common- 前缀
+  branch: common-android17-6.18   # 注意带 common- 前缀；决定 clang 工具链版本
+toolchain:
+  clang_version: r584948c         # Android17-6.18 的 clang
 ```
+
+> 内核树自身的 `build.config.constants` 里写的还是 5.15 的 `r450784e`，而 Android17-6.18
+> 的 prebuilts 里没有这个版本，所以 `toolchain.clang_version` 必须显式指定，不能留空自动读。
 
 `commit` 是唯一的 commit 来源（40 位 SHA，或留空）。钉住的是**你这个 fork 的 SHA**。
 
@@ -73,7 +78,7 @@ git ls-remote https://github.com/aqnya/android13-5.15-vermeer refs/heads/main
 > | 配置项 | 分支名 | 例 |
 > |---|---|---|
 > | `kernel.branch`（你自己的 fork） | 通常**不带**前缀 | `main` |
-> | `manifest.branch`（Google manifest） | **带** `common-` 前缀 | `common-android13-5.15` |
+> | `manifest.branch`（Google manifest） | **带** `common-` 前缀 | `common-android17-6.18` |
 
 ### 3. 放补丁
 
@@ -119,15 +124,16 @@ split_boot; flash_boot;      # ramdisk 在 init_boot：只换 Image，绝不碰 
 `kernel/common` 则由 local manifest 指向你自己维护的 fork：
 
 ```bash
-repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15
+repo init -u https://android.googlesource.com/kernel/manifest -b common-android17-6.18
 # .repo/local_manifests/kernel-common.xml:
 #   <remove-project name="kernel/common"/>
 #   <project path="common" name="android13-5.15-vermeer" remote="self" revision="main"/>
 repo sync common build/kernel prebuilts/clang/host/linux-x86 ...
 ```
 
-这样 clang、build-tools 等工具链会跟着 manifest 一起到位，版本也和内核树配套
-（`common/build.config.constants` 里的 `CLANG_VERSION`）。默认只 sync make 路线需要的项目来省磁盘，
+这样 clang、build-tools 等工具链会跟着 manifest 一起到位。**注意 manifest 决定 clang 版本**：
+Android17-6.18 用的是 `r584948c`，而 5.15 内核树里写的 `r450784e` 在新 prebuilts 里已不存在，
+所以 `toolchain.clang_version` 要显式填 `r584948c`。默认只 sync make 路线需要的项目来省磁盘，
 需要更多项目（比如 `common-modules/virtual-device`）就在 `config.yml` 的 `sync.projects` 里加：
 
 ```yaml
@@ -138,23 +144,26 @@ sync:
     - prebuilts/clang/host/linux-x86
     - prebuilts/build-tools
     - prebuilts/kernel-build-tools
-    - kernel/configs
     - common-modules/virtual-device
 ```
 
-留空 = 用内置默认集合。
+留空 = 用内置默认集合（`common` / `build/kernel` / 三个 `prebuilts`）。
 
 ## 支持的 manifest 分支
 
 `config.yml` 里 `manifest.branch` 可换（Google `kernel/manifest` 的真实分支），
 换它就用对应版本的 prebuilts；`kernel.repo` / `kernel.branch` 指向你自己维护的对应内核：
 
-| manifest 分支 | 内核 |
-|---|---|
-| `common-android13-5.15` | 5.15 |
-| `common-android14-5.15` | 5.15 |
-| `common-android14-6.1` | 6.1 |
-| `common-android15-6.6` | 6.6 |
+| manifest 分支 | 内核 | 自带 clang |
+|---|---|---|
+| `common-android13-5.15` | 5.15 | `r450784e` |
+| `common-android14-5.15` | 5.15 | — |
+| `common-android14-6.1` | 6.1 | — |
+| `common-android15-6.6` | 6.6 | — |
+| `common-android16-6.12` | 6.12 | — |
+| **`common-android17-6.18`**（当前） | 6.18 | `r584948c` |
+
+换 manifest 时记得同步改 `toolchain.clang_version`（走 prebuilts 里实际存在的版本）。
 
 还有带日期的快照分支（`common-android13-5.15-2023-01` 这类），manifest 里每个 project
 都钉了 SHA，适合要和某个时间点完全对齐的场景。
@@ -175,9 +184,10 @@ python3 scripts/parse_config.py config.yml --config-list   # 看会被写进 .co
 bash -n scripts/build.sh                                   # 语法检查
 ```
 
-`scripts/build.sh` 也可以在本地跑完整流程，需要 git / make / curl / python3(PyYAML)，
-会自动下载 `repo` 工具，并且要拉得动 `android.googlesource.com`（prebuilts）和
-你自己 `kernel.repo` 指向的仓库。
+`scripts/build.sh` 也可以在本地跑完整流程，需要 git / make / curl / python3(PyYAML)
+以及 `bison` / `flex` / `pahole`（kconfig 与 BTF 用），会自动下载 `repo` 工具，
+并且要拉得动 `android.googlesource.com`（prebuilts）和你自己 `kernel.repo` 指向的仓库。
+pahole 会优先用 repo 同步下来的 `prebuilts/kernel-build-tools/linux_musl-x86/bin/pahole`。
 
 ## 工作原理
 
