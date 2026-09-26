@@ -62,9 +62,6 @@ ak3:
 # 若某项因依赖不满足被 Kconfig 丢弃，构建会失败并列出差异（不会静默降级）。
 # ------------------------------------------------------------------
 config:
-  CONFIG_SYSVIPC: y
-  CONFIG_IPC_NS: y
-  CONFIG_PID_NS: y
   CONFIG_LRU_GEN_ENABLED: y
   CONFIG_LOCALVERSION: "-aqnya"
   CONFIG_NTSYNC: y
