@@ -44,11 +44,26 @@ jobs:
       - name: Add zram swap
         run: |
           set -u
+          # Azure 内核常常不带 zram.ko，先尝试补装匹配内核的 modules-extra
+          if ! sudo modprobe zram 2>/dev/null; then
+            sudo apt-get update -qq || true
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
+            sudo modprobe zram 2>/dev/null || true
+          fi
 
+          if [ -b /dev/zram0 ]; then
+            echo zstd | sudo tee /sys/block/zram0/comp_algorithm > /dev/null
+            echo 24G | sudo tee /sys/block/zram0/disksize > /dev/null
+            sudo mkswap /dev/zram0
+            sudo swapon -p 100 /dev/zram0
+          else
+            # 兜底：内核无 zram 时退回 swapfile，避免构建直接失败
+            echo "zram unavailable, falling back to swapfile"
             sudo fallocate -l 16G /swapfile
             sudo chmod 600 /swapfile
             sudo mkswap /swapfile
             sudo swapon /swapfile
+          fi
 
           swapon --show
           free -h
