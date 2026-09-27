@@ -41,10 +41,15 @@ jobs:
           df -h /
 
       # 链接阶段 OOM 是 CI 上内核编译最常见的死因
-      - name: Add swap
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 16
+      - name: Add zram swap
+        run: |
+          sudo modprobe zram || true
+          echo lz4 | sudo tee /sys/block/zram0/comp_algorithm || true
+          echo 16G | sudo tee /sys/block/zram0/disksize
+          sudo mkswap /dev/zram0
+          sudo swapon -p 100 /dev/zram0
+          swapon --show
+          free -h
 
       - name: Ensure PyYAML
         run: python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
