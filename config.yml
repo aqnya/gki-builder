@@ -108,6 +108,7 @@ config:
   #   echo "type=idle"           > /sys/block/zram0/recompress
   CONFIG_ZRAM_MULTI_COMP: y
   CONFIG_HWSPINLOCK_QCOM: y
+  CONFIG_NTFS3_FS: y
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
