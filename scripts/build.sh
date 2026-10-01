@@ -363,7 +363,7 @@ check_abi_pinned() {
 # ------------------------------------------------------------ 5. 编译
 build_image() {
   info "编译 Image（$(nproc) 线程）"
-  export KBUILD_BUILD_USER="gki-builder" KBUILD_BUILD_HOST="ci"
+  export KBUILD_BUILD_USER="build-user" KBUILD_BUILD_HOST="build-host"
   make -C "$KERNEL_SRC" "${MAKE_ARGS[@]}" -j"$(nproc)" Image
   [[ -f "$OUT/arch/$ARCH/boot/Image" ]] || die "编译结束但找不到 Image"
 }
