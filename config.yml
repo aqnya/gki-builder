@@ -66,6 +66,10 @@ config:
   # 只对 clang 构建可见；工具链未编入 Polly 时内核侧会探测失败并跳过（不会报错）。
   # 说明与依赖见 config/CC_POLLY 的 help；想关掉改 n 即可。
   CONFIG_CC_POLLY: y
+  # 优化等级 -O3（Kconfig: CC_OPTIMIZE_FOR_PERFORMANCE_O3）。上游该 choice 只允许
+  # ARC，本 fork 已放开 ARM64（见内核 init/Kconfig）。Kconfig choice 会自动取消
+  # -O2，所以只写这一项即可；想回 -O2 改成 n 并加 CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE: y。
+  CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3: y
   CONFIG_LRU_GEN_ENABLED: y
   CONFIG_LOCALVERSION: "-aqnya"
   CONFIG_NTSYNC: y
