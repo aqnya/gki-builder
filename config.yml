@@ -109,6 +109,14 @@ config:
   CONFIG_ZRAM_MULTI_COMP: y
   CONFIG_HWSPINLOCK_QCOM: y
   CONFIG_NTFS3_FS: y
+  # 让 crashlog 独占 pstore / DT 预留的 mtdoops_pmsg@0xa7000000 区域。
+  # 否则 ramoops（postcore_initcall）会先 probe 同地址的 ramoops@0xa7000000
+  # 并注册成 pstore backend，crashlog 在 subsys_initcall 才 probe，会失败。
+  # 已核对：没有别处 select PSTORE_RAM，它不在 abi-pinned-configs.txt，
+  # ramoops 也没有任何 pstore/persistent_ram 符号在 kmi-required-symbols.txt。
+  # 代价：不再有 /dev/pmsg0 和常驻 console-ramoops，只剩 panic 时的
+  # dmesg-crashlog-<id>（crashlog 目前只实现 PSTORE_FLAGS_DMESG）。
+  CONFIG_PSTORE_RAM: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
