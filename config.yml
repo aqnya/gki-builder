@@ -62,6 +62,10 @@ ak3:
 # 若某项因依赖不满足被 Kconfig 丢弃，构建会失败并列出差异（不会静默降级）。
 # ------------------------------------------------------------------
 config:
+  # LLVM Polly 多面体循环优化（Kconfig: CC_POLLY，见内核 init/Kconfig）。
+  # 只对 clang 构建可见；工具链未编入 Polly 时内核侧会探测失败并跳过（不会报错）。
+  # 说明与依赖见 config/CC_POLLY 的 help；想关掉改 n 即可。
+  CONFIG_CC_POLLY: y
   CONFIG_LRU_GEN_ENABLED: y
   CONFIG_LOCALVERSION: "-aqnya"
   CONFIG_NTSYNC: y
@@ -116,7 +120,6 @@ config:
   # ramoops 也没有任何 pstore/persistent_ram 符号在 kmi-required-symbols.txt。
   # 代价：不再有 /dev/pmsg0 和常驻 console-ramoops，只剩 panic 时的
   # dmesg-crashlog-<id>（crashlog 目前只实现 PSTORE_FLAGS_DMESG）。
-  CONFIG_PSTORE_RAM: n
   # CONFIG_KSU: y
   # CONFIG_DEBUG_INFO: n
   # CONFIG_SOME_MODULE: m
